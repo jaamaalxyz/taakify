@@ -57,7 +57,7 @@ Postgres server in the background.
 | On-device DB     | PGlite (Postgres WASM, persisted to IndexedDB)          | Local reads/writes, real SQL                                       |
 | Read-path sync   | ElectricSQL (self-hosted Docker)                        | Streams Postgres → devices, partitioned per household via shapes   |
 | Write path       | Client outbox queue → Hono (Node) API → server Postgres | Offline writes queue and survive restarts; API validates + applies |
-| Auth             | better-auth                                             | Email/password logins, sessions                                    |
+| Auth             | better-auth                                             | Email/password + Google sign-in, sessions                          |
 | Server DB        | Postgres (Docker)                                       | Source of truth; RLS per household                                 |
 | Barcode scanning | ZXing (browser, phone camera)                           | ISBN capture                                                       |
 | Book metadata    | Open Library + Google Books APIs (free)                 | ISBN/title lookup, covers                                          |
@@ -118,8 +118,8 @@ Shared catalog (global, no household_id):
 
 ## 5. Key User Journeys (validated with user)
 
-1. **Setup** — signup → create household → define bookcases/shelves →
-   invite family via link.
+1. **Setup** — signup (email/password or Google) → create household →
+   define bookcases/shelves → invite family via link.
 2. **Bulk import** — Goodreads CSV → editions + books + importer's
    reading_status (shelf mapping: read→finished, to-read→want_to_read;
    ratings carried). Gaps filled by barcode scan or fast manual entry in

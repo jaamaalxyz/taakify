@@ -4,13 +4,15 @@
 
 **Goal:** Monorepo + dev infrastructure + full database schema with RLS + auth + household/membership/invite flows, ending with: you can sign up, create your household, and invite a family member who joins it.
 
-**Architecture:** pnpm monorepo with a Hono (Node) API and a Vite React SPA. Postgres (wal_level=logical, ready for ElectricSQL) and Electric run in Docker Compose for dev. better-auth handles email/password sessions. Two DB pools: a privileged pool (migrations, auth tables, service operations like household creation and invite acceptance) and an RLS-enforced app pool (`taakify_app` role) for all tenant data. Tenancy is enforced by RLS policies keyed on a per-transaction `app.user_id` setting via a `SECURITY DEFINER` membership-lookup function.
+**Architecture:** pnpm monorepo with a Hono (Node) API and a Vite React SPA. Postgres (wal_level=logical, ready for ElectricSQL) and Electric run in Docker Compose for dev. better-auth handles email/password and Google sign-in sessions. Two DB pools: a privileged pool (migrations, auth tables, service operations like household creation and invite acceptance) and an RLS-enforced app pool (`taakify_app` role) for all tenant data. Tenancy is enforced by RLS policies keyed on a per-transaction `app.user_id` setting via a `SECURITY DEFINER` membership-lookup function.
 
 **Tech Stack:** Node 22, pnpm, TypeScript, Hono, better-auth, pg (no ORM — hand-written SQL matches the PGlite client-side idiom coming in Plan 2), Vitest, Vite, React 19, react-router.
 
 **Spec:** `docs/superpowers/specs/2026-07-16-taakify-bookshelf-design.md`
 
 **Prerequisites (verify before starting):** Docker + Docker Compose, Node 22 (`node -v`), pnpm 9+ (`corepack enable && corepack prepare pnpm@latest --activate`).
+
+**Google OAuth prerequisite (user action, can be done anytime before Task 11):** In [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an OAuth 2.0 Client ID (type: Web application) with authorized redirect URI `http://localhost:5173/api/auth/callback/google` (add the production URL in Plan 5). Put the client ID/secret in `apps/api/.env`. Google sign-in is **conditionally enabled** — the app runs fine without these credentials; the Google button simply won't work until they're set.
 
 **Conventions:**
 - All commands run from repo root `/Users/jaamaalxyz/training/taakify` unless stated.
@@ -262,8 +264,12 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5433/taakify
 # RLS-enforced connection for tenant data
 APP_DATABASE_URL=postgresql://taakify_app:taakify_app_dev@localhost:5433/taakify
 BETTER_AUTH_SECRET=dev-secret-change-me-32-chars-min!
-BETTER_AUTH_URL=http://localhost:3001
+# Web origin: OAuth flows go through the Vite proxy so Google redirects land on the SPA.
+BETTER_AUTH_URL=http://localhost:5173
 PORT=3001
+# Google sign-in (optional in dev — button disabled until set; see prerequisites)
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
 ```
 
 Run: `cp apps/api/.env.example apps/api/.env && pnpm install`
@@ -973,12 +979,22 @@ Expected: FAIL — signup endpoint 404 (auth not mounted).
 import { betterAuth } from "better-auth";
 import { adminPool } from "./db/pool.js";
 
+const googleEnabled = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+
 export const auth = betterAuth({
   database: adminPool,
   secret: process.env.BETTER_AUTH_SECRET,
   baseURL: process.env.BETTER_AUTH_URL,
   basePath: "/api/auth",
   emailAndPassword: { enabled: true },
+  socialProviders: googleEnabled
+    ? {
+        google: {
+          clientId: process.env.GOOGLE_CLIENT_ID!,
+          clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+        },
+      }
+    : undefined,
   trustedOrigins: ["http://localhost:5173"],
 });
 ```
@@ -1605,6 +1621,12 @@ export function SignUp() {
         <button type="submit">Sign up</button>
         {error && <p className="error">{error}</p>}
       </form>
+      <button
+        type="button"
+        onClick={() => authClient.signIn.social({ provider: "google", callbackURL: "/" })}
+      >
+        Continue with Google
+      </button>
       <p className="muted">Already have an account? <Link to="/signin">Sign in</Link></p>
     </main>
   );
@@ -1641,6 +1663,12 @@ export function SignIn() {
         <button type="submit">Sign in</button>
         {error && <p className="error">{error}</p>}
       </form>
+      <button
+        type="button"
+        onClick={() => authClient.signIn.social({ provider: "google", callbackURL: "/" })}
+      >
+        Continue with Google
+      </button>
       <p className="muted">New here? <Link to="/signup">Create an account</Link></p>
     </main>
   );
@@ -1815,6 +1843,7 @@ pnpm dev:web
 2. Click "Invite a family member", enter an email → copy the invite link.
 3. Open the invite link in a private/incognito window → invite landing shows household name → create the second account → reopen invite link → Accept → Home shows the same library, role `member`.
 4. Confirm isolation: sign up a third account in another private window, create its own household → its Home never shows your library.
+5. Google sign-in (only if `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` are set in `apps/api/.env`): sign out, click "Continue with Google" → Google consent screen → redirected back to Home signed in. A fresh Google user lands with no memberships and sees the "Create your library" link. *(OAuth is verified manually — it can't run in the automated test suite without mocking Google, which isn't worth the harness at this stage.)*
 
 Expected: every step works; note anything broken and fix before proceeding.
 
