@@ -6,17 +6,14 @@
 ## 1. Overview
 
 Taakify is a mobile-first, local-first web application for organizing a home
-library of 500+ Bangla and English books. It tracks per-person reading
-lifecycle, physical shelf locations, lending books out to friends, and books
-borrowed in from others. It is built for one household initially but is
-multi-tenant (SaaS-ready) from the first migration.
+library of 500+ books. It tracks per-person reading lifecycle, physical shelf locations, lending books out to friends, and books borrowed in from others. It is built for one household initially but is multi-tenant (SaaS-ready) from the first migration.
 
 **Primary users:** a family of 2–4 members, each with their own login, sharing
 one library. **Later:** other households as paying SaaS customers.
 
 ## 2. Goals & Non-Goals
 
-**Goals**
+Goals:
 
 - Answer "do we own this?" and "where is it?" instantly, even offline at a
   bookstore or standing at the shelf.
@@ -27,13 +24,12 @@ one library. **Later:** other households as paying SaaS customers.
   nagged for return).
 - Get 500+ existing books cataloged fast: Goodreads CSV import + rapid
   barcode/manual batch entry.
-- Handle Bangla titles/authors as first-class (Unicode throughout; smooth
-  manual entry because ISBN lookup often fails for Bangla books).
+- Handle local titles/authors as first-class (Unicode throughout; smooth
+  manual entry because ISBN lookup often fails for local books).
 - Every component fully open source (MIT/Apache 2.0), free for commercial
-  use, self-hostable. No proprietary services, no source-available licenses
-  (explicitly excludes Supabase hosted, PowerSync, and similar).
+  use, self-hostable. No proprietary services, no source-available licenses.
 
-**Non-Goals (v1)**
+Non-Goals (v1):
 
 - Billing/payments (schema fields exist; no integration until V2).
 - Native mobile apps (PWA only).
@@ -51,20 +47,20 @@ Postgres server in the background.
 
 **Components (all MIT or Apache 2.0):**
 
-| Component | Choice | Role |
-|---|---|---|
-| Frontend | React + Vite SPA, installable PWA | Mobile-first UI |
-| On-device DB | PGlite (Postgres WASM, persisted to IndexedDB) | Local reads/writes, real SQL |
-| Read-path sync | ElectricSQL (self-hosted Docker) | Streams Postgres → devices, partitioned per household via shapes |
-| Write path | Client outbox queue → Hono (Node) API → server Postgres | Offline writes queue and survive restarts; API validates + applies |
-| Auth | better-auth | Email/password logins, sessions |
-| Server DB | Postgres (Docker) | Source of truth; RLS per household |
-| Barcode scanning | ZXing (browser, phone camera) | ISBN capture |
-| Book metadata | Open Library + Google Books APIs (free) | ISBN/title lookup, covers |
-| Cover storage | Server disk (cached from Open Library) | No proprietary object store |
+| Component        | Choice                                                  | Role                                                               |
+| ---------------- | ------------------------------------------------------- | ------------------------------------------------------------------ |
+| Frontend         | React + Vite SPA, installable PWA                       | Mobile-first UI                                                    |
+| On-device DB     | PGlite (Postgres WASM, persisted to IndexedDB)          | Local reads/writes, real SQL                                       |
+| Read-path sync   | ElectricSQL (self-hosted Docker)                        | Streams Postgres → devices, partitioned per household via shapes   |
+| Write path       | Client outbox queue → Hono (Node) API → server Postgres | Offline writes queue and survive restarts; API validates + applies |
+| Auth             | better-auth                                             | Email/password logins, sessions                                    |
+| Server DB        | Postgres (Docker)                                       | Source of truth; RLS per household                                 |
+| Barcode scanning | ZXing (browser, phone camera)                           | ISBN capture                                                       |
+| Book metadata    | Open Library + Google Books APIs (free)                 | ISBN/title lookup, covers                                          |
+| Cover storage    | Server disk (cached from Open Library)                  | No proprietary object store                                        |
 
 **Hosting:** single Oracle Cloud always-free ARM VM running Docker Compose
-(Postgres, Electric, API, static frontend behind Caddy/nginx). $0/month.
+(Postgres, Electric, API, static frontend behind nginx). $0/month.
 
 **Conflict resolution:** last-write-wins via `updated_at`. Conflicts in this
 domain are rare and benign. Loan return operations are idempotent.
@@ -80,7 +76,7 @@ household's books.
 UUIDs everywhere (offline-safe inserts), `updated_at` on all tables
 (last-write-wins), soft deletes (`deleted_at`), `created_by` on tenant tables.
 
-**Identity & tenancy**
+Identity & tenancy:
 
 - `user` — login identity (better-auth managed). No library data.
 - `household` — the tenant. `name`, `plan` (default `free`), `plan_status`,
@@ -89,7 +85,7 @@ UUIDs everywhere (offline-safe inserts), `updated_at` on all tables
   A user may belong to multiple households.
 - `invite` — email, household, role, token, expiry.
 
-**Shared catalog (global, no household_id)**
+Shared catalog (global, no household_id):
 
 - `edition` — the abstract book: `isbn` (nullable), `title`, `authors`,
   `language`, `publisher`, `published_year`, `cover_url`, `series_name`
@@ -141,14 +137,14 @@ Bottom tab bar, five screens:
 
 1. **Home** — overdue loans (red, top), to-return list, per-member
    Currently Reading strips, recently added.
-2. **Library** — instant local search (Bangla + English), combinable filters
+2. **Library** — instant local search across all books (owned, borrowed-in,
+   wishlist — ownership shown as badge/filter), combinable filters
    (status × tag × shelf × language × ownership), browse by bookcase/shelf.
    Book page: cover, edition + copy details, all members' statuses, loan
    history, actions (lend, move shelf, edit, update my status).
-3. **Loans** — active lent-out / borrowed-in with due dates; per-contact
+3. **Add** (center button) — barcode scan / ISBN / title search / manual, batch mode, CSV import.
+4. **Loans** — active lent-out / borrowed-in with due dates; per-contact
    history; contact management.
-4. **Add** (center button) — barcode scan / ISBN / title search / manual
-   (Bangla-fast), batch mode, CSV import.
 5. **Profile & Stats** — reading counts, wishlist (priority-sorted),
    household settings, invites.
 
@@ -158,11 +154,12 @@ Bottom tab bar, five screens:
 Goodreads CSV import; ISBN/title lookup + manual + barcode scan; batch add;
 shelves; per-member lifecycle with dates/ratings/notes; tags + filters;
 instant search; lending/borrowing with due dates, overdue views, history;
-wishlist with priority; do-not-lend; PWA install; full offline read/write
-with sync.
+wishlist with priority; do-not-lend; camera cover photo upload for books
+with no online cover (photos taken offline queue in the outbox); PWA
+install; full offline read/write with sync.
 
 **V1.5:** stats dashboards; overdue email reminders (server cron);
-contact→user linking; camera cover upload for books with no online cover.
+contact→user linking.
 
 **V2 — SaaS:** public signups, billing (Stripe/Paddle behind existing plan
 fields), landing page, cross-household features ("your network owns this"),
