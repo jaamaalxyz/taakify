@@ -104,7 +104,7 @@ UUIDs everywhere (offline-safe inserts), `updated_at` on all tables
   (`high`/`medium`/`low`, nullable, wishlist only), `notes`.
   Duplicate copies = multiple rows.
 - `bookcase` — `name`. `shelf` — `bookcase_id`, `position`, optional label.
-- `reading_status` — (`book_id`, `member/user_id`) → `status`
+- `reading_status` — (`book_id`, `user_id`) → `status`
   (`unread`/`want_to_read`/`reading`/`finished`/`abandoned`),
   `started_at`, `finished_at`, `rating` (1–5, nullable), `review_note`.
   One row per member per book.
