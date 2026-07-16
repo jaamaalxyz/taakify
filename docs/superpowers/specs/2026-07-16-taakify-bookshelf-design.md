@@ -28,6 +28,10 @@ Goals:
   manual entry because ISBN lookup often fails for local books).
 - Every component fully open source (MIT/Apache 2.0), free for commercial
   use, self-hostable. No proprietary services, no source-available licenses.
+  **One deliberate exception:** cover image storage uses Cloudflare R2
+  (proprietary, free tier, zero egress) — accessed only through the standard
+  S3 API behind a two-method storage interface (`put`, `delete`), so it is
+  swappable for self-hosted MinIO or any S3 store via config.
 
 Non-Goals (v1):
 
@@ -57,7 +61,7 @@ Postgres server in the background.
 | Server DB        | Postgres (Docker)                                       | Source of truth; RLS per household                                 |
 | Barcode scanning | ZXing (browser, phone camera)                           | ISBN capture                                                       |
 | Book metadata    | Open Library + Google Books APIs (free)                 | ISBN/title lookup, covers                                          |
-| Cover storage    | Server disk (cached from Open Library)                  | No proprietary object store                                        |
+| Cover storage    | Cloudflare R2 via S3 API (free tier, zero egress)       | Behind a `put`/`delete` storage interface; swappable to MinIO      |
 
 **Hosting:** single Oracle Cloud always-free ARM VM running Docker Compose
 (Postgres, Electric, API, static frontend behind nginx). $0/month.
