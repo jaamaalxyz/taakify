@@ -11,3 +11,13 @@ export function appPool(): pg.Pool {
   _appPool ??= new pg.Pool({ connectionString: process.env.APP_DATABASE_URL });
   return _appPool;
 }
+
+// Rollback that never throws: on a dead connection ROLLBACK itself fails,
+// and that failure must not mask the error that caused the rollback.
+export async function safeRollback(client: pg.PoolClient): Promise<void> {
+  try {
+    await client.query("ROLLBACK");
+  } catch (rollbackErr) {
+    console.error("Failed to rollback transaction:", rollbackErr);
+  }
+}

@@ -35,7 +35,7 @@ export function InviteAccept({ authed }: { authed: boolean }) {
       ) : (
         <p>
           First <Link to={`/signup?next=/invite/${token}`}>create an account</Link> or{" "}
-          <Link to={`/signin?next=/invite/${token}`}>sign in</Link>, then reopen this link.
+          <Link to={`/signin?next=/invite/${token}`}>sign in</Link> — you'll come right back here.
         </p>
       )}
     </main>

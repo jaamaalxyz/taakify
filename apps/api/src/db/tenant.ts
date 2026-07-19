@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { appPool } from "./pool.js";
+import { appPool, safeRollback } from "./pool.js";
 
 // Runs fn inside a transaction on the RLS-enforced pool with app.user_id set.
 // Every RLS policy keys on this setting via app_user_households().
@@ -15,7 +15,7 @@ export async function withUser<T>(
     await client.query("COMMIT");
     return result;
   } catch (err) {
-    await client.query("ROLLBACK");
+    await safeRollback(client);
     throw err;
   } finally {
     client.release();

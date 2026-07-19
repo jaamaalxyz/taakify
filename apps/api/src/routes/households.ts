@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { adminPool } from "../db/pool.js";
+import { adminPool, safeRollback } from "../db/pool.js";
 import { requireUser, type SessionUser } from "../middleware/session.js";
 
 export const households = new Hono<{ Variables: { user: SessionUser } }>();
@@ -25,7 +25,7 @@ households.post("/", requireUser, async (c) => {
     await client.query("COMMIT");
     return c.json({ household: rows[0] }, 201);
   } catch (err) {
-    await client.query("ROLLBACK");
+    await safeRollback(client);
     throw err;
   } finally {
     client.release();

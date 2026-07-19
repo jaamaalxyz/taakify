@@ -1,10 +1,12 @@
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { authClient } from "../lib/auth.js";
+import { safeNext } from "../lib/safe-next.js";
 
 export function SignIn() {
   const [error, setError] = useState("");
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -15,7 +17,7 @@ export function SignIn() {
     });
     if (error) return setError(error.message ?? "Sign-in failed");
     await authClient.getSession();
-    navigate("/");
+    navigate(safeNext(searchParams.get("next"), "/"));
   }
 
   return (

@@ -1,10 +1,12 @@
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { authClient } from "../lib/auth.js";
+import { safeNext } from "../lib/safe-next.js";
 
 export function SignUp() {
   const [error, setError] = useState("");
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -18,7 +20,7 @@ export function SignUp() {
     // useSession updates async (better-auth refetches on a delayed signal);
     // settle it before navigating so the auth gate doesn't bounce to /signin.
     await authClient.getSession();
-    navigate("/onboarding");
+    navigate(safeNext(searchParams.get("next"), "/onboarding"));
   }
 
   return (

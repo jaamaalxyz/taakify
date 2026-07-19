@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { randomBytes } from "node:crypto";
-import { adminPool } from "../db/pool.js";
+import { adminPool, safeRollback } from "../db/pool.js";
 import { withUser } from "../db/tenant.js";
 import { requireUser, type SessionUser } from "../middleware/session.js";
 
@@ -17,26 +17,26 @@ householdInvites.post("/", requireUser, async (c) => {
   const role = body.role === "admin" ? "admin" : body.role === "member" ? "member" : null;
   if (!email || !role) return c.json({ error: "email and role (admin|member) required" }, 400);
 
-  // RLS scopes the membership check to the caller's households.
-  const canInvite = await withUser(user.id, async (client) => {
+  const token = randomBytes(24).toString("base64url");
+  const expiresAt = new Date(Date.now() + INVITE_TTL_DAYS * 86400_000);
+
+  // One transaction: the role check and the insert can't be split by a
+  // concurrent role change. RLS scopes both to the caller's households.
+  const created = await withUser(user.id, async (client) => {
     const { rows } = await client.query(
       `SELECT role FROM membership
        WHERE household_id = $1 AND user_id = $2 AND deleted_at IS NULL`,
       [householdId, user.id]
     );
-    return rows[0]?.role === "owner" || rows[0]?.role === "admin";
-  });
-  if (!canInvite) return c.json({ error: "forbidden" }, 403);
-
-  const token = randomBytes(24).toString("base64url");
-  const expiresAt = new Date(Date.now() + INVITE_TTL_DAYS * 86400_000);
-  await withUser(user.id, (client) =>
-    client.query(
+    if (rows[0]?.role !== "owner" && rows[0]?.role !== "admin") return false;
+    await client.query(
       `INSERT INTO invite (household_id, email, role, token, expires_at, created_by)
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [householdId, email, role, token, expiresAt, user.id]
-    )
-  );
+    );
+    return true;
+  });
+  if (!created) return c.json({ error: "forbidden" }, 403);
   return c.json({ token, url: `/invite/${token}`, expiresAt }, 201);
 });
 
@@ -71,9 +71,9 @@ invites.post("/:token/accept", requireUser, async (c) => {
       [c.req.param("token")]
     );
     const invite = rows[0];
-    if (!invite) { await client.query("ROLLBACK"); return c.json({ error: "not found" }, 404); }
-    if (invite.accepted_at) { await client.query("ROLLBACK"); return c.json({ error: "already accepted" }, 410); }
-    if (new Date(invite.expires_at) < new Date()) { await client.query("ROLLBACK"); return c.json({ error: "expired" }, 410); }
+    if (!invite) { await safeRollback(client); return c.json({ error: "not found" }, 404); }
+    if (invite.accepted_at) { await safeRollback(client); return c.json({ error: "already accepted" }, 410); }
+    if (new Date(invite.expires_at) < new Date()) { await safeRollback(client); return c.json({ error: "expired" }, 410); }
 
     // Acceptance is token-authorized: invite.email is informational only (links
     // are hand-shared; the invitee may sign up under a different address).
@@ -90,7 +90,7 @@ invites.post("/:token/accept", requireUser, async (c) => {
     await client.query("COMMIT");
     return c.json({ householdId: invite.household_id });
   } catch (err) {
-    await client.query("ROLLBACK");
+    await safeRollback(client);
     throw err;
   } finally {
     client.release();
