@@ -1,0 +1,11 @@
+{
+  "name": "taakify",
+  "private": true,
+  "scripts": {
+    "dev:api": "pnpm --filter @taakify/api dev",
+    "dev:web": "pnpm --filter @taakify/web dev",
+    "migrate": "pnpm --filter @taakify/api migrate",
+    "test": "pnpm --filter @taakify/api test"
+  },
+  "engines": { "node": ">=24" }
+}
