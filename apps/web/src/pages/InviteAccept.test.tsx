@@ -43,4 +43,13 @@ describe("InviteAccept", () => {
     renderInvite(true);
     expect(await screen.findByText(/Invite expired/)).toBeInTheDocument();
   });
+
+  it("shows signup and signin links when unauthenticated", async () => {
+    vi.mocked(api).mockResolvedValueOnce({ householdName: "Family Library", email: "a@b.com", role: "member" });
+    renderInvite(false);
+    await screen.findByText('Join "Family Library"');
+    expect(screen.getByRole("link", { name: "create an account" })).toHaveAttribute("href", "/signup?next=/invite/tok123");
+    expect(screen.getByRole("link", { name: "sign in" })).toHaveAttribute("href", "/signin?next=/invite/tok123");
+    expect(screen.queryByRole("button", { name: "Accept invite" })).not.toBeInTheDocument();
+  });
 });
