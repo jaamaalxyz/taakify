@@ -5,7 +5,7 @@
     "dev:api": "pnpm --filter @taakify/api dev",
     "dev:web": "pnpm --filter @taakify/web dev",
     "migrate": "pnpm --filter @taakify/api migrate",
-    "test": "pnpm --filter @taakify/api test"
+    "test": "pnpm --filter @taakify/api test && pnpm --filter @taakify/web test"
   },
   "engines": { "node": ">=24" }
 }
