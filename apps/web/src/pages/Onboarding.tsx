@@ -1,6 +1,11 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api.js";
+import { Button } from "../components/ui/button.js";
+import { Input } from "../components/ui/input.js";
+import { Label } from "../components/ui/label.js";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
+import { Alert, AlertDescription } from "../components/ui/alert.js";
 
 export function Onboarding() {
   const [error, setError] = useState("");
@@ -18,14 +23,29 @@ export function Onboarding() {
   }
 
   return (
-    <main>
-      <h1>Name your library</h1>
-      <p className="muted">This is your household's shared bookshelf. You can invite family after.</p>
-      <form onSubmit={onSubmit}>
-        <input name="name" placeholder="e.g. Our Family Library" required />
-        <button type="submit">Create library</button>
-        {error && <p className="error">{error}</p>}
-      </form>
+    <main className="flex min-h-dvh items-center justify-center p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <CardTitle>Name your library</CardTitle>
+          <CardDescription>This is your household's shared bookshelf. You can invite family after.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={onSubmit} className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="name">Library name</Label>
+              <Input id="name" name="name" placeholder="e.g. Our Family Library" required />
+            </div>
+            {error && (
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+            <Button type="submit" className="w-full">
+              Create library
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
     </main>
   );
 }
