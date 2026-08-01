@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api.js";
+import { Button } from "../components/ui/button.js";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
+import { Alert, AlertDescription } from "../components/ui/alert.js";
+import { Skeleton } from "../components/ui/skeleton.js";
 
 type Info = { householdName: string; email: string; role: string };
 
@@ -23,20 +27,45 @@ export function InviteAccept({ authed }: { authed: boolean }) {
     }
   }
 
-  if (error) return <main><p className="error">Invite problem: {error}</p></main>;
-  if (!info) return <main className="muted">Loading invite…</main>;
-
   return (
-    <main>
-      <h1>Join "{info.householdName}"</h1>
-      <p className="muted">You've been invited as {info.role} ({info.email}).</p>
-      {authed ? (
-        <button onClick={accept}>Accept invite</button>
+    <main className="flex min-h-dvh items-center justify-center p-4">
+      {error ? (
+        <Alert variant="destructive" className="w-full max-w-sm">
+          <AlertDescription>Invite problem: {error}</AlertDescription>
+        </Alert>
+      ) : !info ? (
+        <div className="w-full max-w-sm space-y-3">
+          <Skeleton className="h-8 w-2/3" />
+          <Skeleton className="h-4 w-1/2" />
+        </div>
       ) : (
-        <p>
-          First <Link to={`/signup?next=/invite/${token}`}>create an account</Link> or{" "}
-          <Link to={`/signin?next=/invite/${token}`}>sign in</Link> — you'll come right back here.
-        </p>
+        <Card className="w-full max-w-sm">
+          <CardHeader>
+            <CardTitle>Join &quot;{info.householdName}&quot;</CardTitle>
+            <CardDescription>
+              You've been invited as {info.role} ({info.email}).
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {authed ? (
+              <Button className="w-full" onClick={accept}>
+                Accept invite
+              </Button>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                First{" "}
+                <Link to={`/signup?next=/invite/${token}`} className="text-primary underline-offset-4 hover:underline">
+                  create an account
+                </Link>{" "}
+                or{" "}
+                <Link to={`/signin?next=/invite/${token}`} className="text-primary underline-offset-4 hover:underline">
+                  sign in
+                </Link>{" "}
+                — you'll come right back here.
+              </p>
+            )}
+          </CardContent>
+        </Card>
       )}
     </main>
   );
