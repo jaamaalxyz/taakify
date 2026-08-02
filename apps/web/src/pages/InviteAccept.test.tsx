@@ -12,6 +12,8 @@ function renderInvite(authed: boolean) {
     <MemoryRouter initialEntries={["/invite/tok123"]}>
       <Routes>
         <Route path="/invite/:token" element={<InviteAccept authed={authed} />} />
+        {/* Catch the post-accept navigate("/") so react-router doesn't warn. */}
+        <Route path="*" element={null} />
       </Routes>
     </MemoryRouter>
   );

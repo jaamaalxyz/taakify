@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { Home } from "./Home.js";
 import { api } from "../lib/api.js";
@@ -16,8 +16,10 @@ const me = {
 
 function renderHome() {
   render(
-    <MemoryRouter>
-      <Home />
+    <MemoryRouter initialEntries={["/"]}>
+      <Routes>
+        <Route path="/" element={<Home />} />
+      </Routes>
     </MemoryRouter>
   );
 }
