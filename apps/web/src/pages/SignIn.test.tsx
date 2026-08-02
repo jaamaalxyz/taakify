@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { SignIn } from "./SignIn.js";
 import { authClient } from "../lib/auth.js";
@@ -14,8 +14,12 @@ vi.mock("../lib/auth.js", () => ({
 
 function renderSignIn() {
   render(
-    <MemoryRouter>
-      <SignIn />
+    <MemoryRouter initialEntries={["/signin"]}>
+      <Routes>
+        <Route path="/signin" element={<SignIn />} />
+        {/* Catch the post-submit navigate("/") so react-router doesn't warn. */}
+        <Route path="*" element={null} />
+      </Routes>
     </MemoryRouter>
   );
 }
