@@ -302,8 +302,9 @@ books.post("/", async (c) => {
     );
     return rows[0];
   }).catch((err) => {
-    // RLS insert policy rejects cross-household writes -> 23514/42501 surfaces as RLS error.
-    if (String(err).includes("row-level security")) return null;
+    // RLS insert policy rejects cross-household writes -> Postgres raises SQLSTATE 42501.
+    // Match on err.code, not err.message text (message wording isn't a stable contract).
+    if ((err as { code?: string }).code === "42501") return null;
     throw err;
   });
   if (!book) return c.json({ error: "forbidden" }, 403);
@@ -416,7 +417,7 @@ Four small, independent route files. Same pattern as Task 2 — all through `wit
 
 - [ ] **Step 4a: `shelves.ts`** — `GET /api/bookcases?householdId=`, `POST /api/bookcases`, `POST /api/bookcases/:id/shelves` (shelf.position auto = max+1), `PATCH /api/shelves/:id`, soft `DELETE`. Test RLS isolation.
 
-- [ ] **Step 4b: `reading-status.ts`** — `PUT /api/books/:bookId/status` (upsert via `ON CONFLICT (book_id, user_id) WHERE deleted_at IS NULL DO UPDATE`; the partial unique index from `0002_core.sql` backs this). `GET /api/books/:bookId/status` returns all members' statuses (RLS-visible rows only). Test that user A's status doesn't affect user B's.
+- [ ] **Step 4b: `reading-status.ts`** — `PUT /api/books/:bookId/status` (upsert via `ON CONFLICT (book_id, user_id) WHERE deleted_at IS NULL DO UPDATE`; the partial unique index from `0002_core.sql` backs this). The request body carries only status fields (status, dates, rating, note) — **`household_id` is never read from the client**; derive it server-side inside the same `withUser` transaction via `SELECT household_id FROM book WHERE id = $1`, and use that value in the `INSERT`/`ON CONFLICT` — trusting a client-supplied `householdId` here would let a caller attempt to write a status row under a household they don't belong to (RLS still backstops it, but the query itself should never offer that path). `GET /api/books/:bookId/status` returns all members' statuses (RLS-visible rows only). Test that user A's status doesn't affect user B's.
 
 - [ ] **Step 4c: `tags.ts`** — `GET /api/tags?householdId=`, `POST /api/tags`, `POST /api/books/:bookId/tags` (insert into `book_tag`), `DELETE /api/books/:bookId/tags/:tagId` (soft). Test the `UNIQUE (household_id, name)` dedup.
 
@@ -568,7 +569,12 @@ Each: failing test → implement → pass → commit.
 
 - [ ] **Step 1: Sweep for stale "Plan 2/Plan 3" references.** Search the repo for `Plan 2`, `Plan 3`, `Books arrive`, `Sync arrives` and fix:
   - `apps/web/src/pages/Home.tsx` placeholder (handled in Task 7, but re-verify it's gone).
-  - `docs/superpowers/plans/2026-07-16-taakify-plan-1-foundation.md` — its forward references now say "Books (Plan 2)" and "Sync (Plan 3)"; add a one-line note that plans were renumbered for feature-first ordering, pointing at this plan's spec §3.
+  - `docs/superpowers/plans/2026-07-16-taakify-plan-1-foundation.md` — this has more than a stray forward reference; it makes **substantive statements about old-numbering Plan 2 (sync)** that are now factually wrong under the new numbering, not just stale pointers. A one-line note is not enough — reword each of these in place:
+    - Line 9 (tech stack): "`pg` (no ORM...) matches the PGlite client-side idiom coming in Plan 2" → Plan 2 is now Books (no PGlite); this should say "coming in Plan 3" or reference the Sync plan by name.
+    - Line 85: "`packages/shared` is deliberately absent — it arrives in Plan 2" → now arrives in Plan 3; fix the number.
+    - Line 194: "Electric is otherwise unused until Plan 2 — booting it now proves..." → Electric work is now Plan 3.
+    - Line 1903 (exit criteria): "actual sync is Plan 2" → now Plan 3.
+    Add a short note near the top of the doc (e.g. under its title) that plans were renumbered for feature-first ordering and point at this plan's spec §3, in addition to fixing each inline reference above — the note alone doesn't fix statements that are actively incorrect, not merely stale.
   - `docs/superpowers/specs/2026-08-01-taakify-ui-restyle-design.md` §1 references "a previously-planned Plan 2 (ElectricSQL sync) or Plan 3 (books domain)" — update to reflect renumbering.
 
 - [ ] **Step 2: Full test + typecheck + build**
