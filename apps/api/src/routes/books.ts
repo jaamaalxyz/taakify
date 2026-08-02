@@ -86,7 +86,6 @@ books.post("/", async (c) => {
 
   const result = await withUser(user.id, async (client) => {
     let editionId = body.editionId;
-    let editionData = body.edition;
     if (!editionId && body.edition) {
       const e = await client.query(
         `INSERT INTO edition (id, isbn, title, authors, language, cover_url)
@@ -94,8 +93,15 @@ books.post("/", async (c) => {
         [randomUUID(), body.edition.isbn ?? null, body.edition.title, body.edition.authors ?? "", body.edition.language ?? null, body.edition.cover_url ?? null]
       );
       editionId = e.rows[0].id;
-      editionData = e.rows[0];
     }
+    // Fetch edition data regardless of which path (inline create or reuse)
+    const { rows: editionRows } = await client.query(
+      `SELECT id, isbn, title, authors, language, cover_url FROM edition WHERE id = $1`,
+      [editionId]
+    );
+    if (!editionRows[0]) return null;
+    const editionData = editionRows[0];
+
     const bookId = randomUUID();
     const { rowCount } = await client.query(
       `INSERT INTO book (id, household_id, edition_id, ownership, shelf_id, do_not_lend, wishlist_priority, notes, created_by)
@@ -103,7 +109,17 @@ books.post("/", async (c) => {
       [bookId, body.householdId, editionId, body.ownership, body.shelf_id ?? null, body.do_not_lend ?? false, body.wishlist_priority ?? null, body.notes ?? null, user.id]
     );
     if (!rowCount) return null;
-    return { bookId, editionId, editionData };
+
+    // Re-select the created book with edition to return full nested structure
+    const { rows: bookRows } = await client.query(
+      `SELECT b.id, b.ownership, b.format, b.shelf_id, b.do_not_lend, b.wishlist_priority, b.notes, b.updated_at,
+              e.id AS edition_id, e.title, e.authors, e.cover_url, e.isbn, e.language
+       FROM book b JOIN edition e ON e.id = b.edition_id
+       WHERE b.id = $1 AND b.deleted_at IS NULL`,
+      [bookId]
+    );
+    if (!bookRows[0]) return null;
+    return bookRows[0];
   }).catch((err) => {
     // RLS insert policy rejects cross-household writes -> Postgres raises SQLSTATE 42501.
     // Match on err.code, not err.message text (message wording isn't a stable contract).
@@ -112,21 +128,23 @@ books.post("/", async (c) => {
   });
   if (!result) return c.json({ error: "forbidden" }, 403);
   const book = {
-    id: result.bookId,
+    id: result.id,
     household_id: body.householdId,
-    edition_id: result.editionId,
-    ownership: body.ownership,
-    shelf_id: body.shelf_id ?? null,
-    do_not_lend: body.do_not_lend ?? false,
-    wishlist_priority: body.wishlist_priority ?? null,
-    notes: body.notes ?? null,
+    edition_id: result.edition_id,
+    ownership: result.ownership,
+    format: result.format,
+    shelf_id: result.shelf_id,
+    do_not_lend: result.do_not_lend,
+    wishlist_priority: result.wishlist_priority,
+    notes: result.notes,
+    updated_at: result.updated_at,
     edition: {
-      id: result.editionId,
-      title: result.editionData.title,
-      authors: result.editionData.authors ?? "",
-      cover_url: result.editionData.cover_url ?? null,
-      isbn: result.editionData.isbn ?? null,
-      language: result.editionData.language ?? null,
+      id: result.edition_id,
+      title: result.title,
+      authors: result.authors ?? "",
+      cover_url: result.cover_url ?? null,
+      isbn: result.isbn ?? null,
+      language: result.language ?? null,
     }
   };
   return c.json({ book }, 201);
@@ -137,7 +155,7 @@ books.get("/:id", async (c) => {
   const user = c.get("user");
   const { rows } = await withUser(user.id, (client) =>
     client.query(
-      `SELECT b.id, b.ownership, b.format, b.shelf_id, b.do_not_lend, b.wishlist_priority, b.notes,
+      `SELECT b.id, b.ownership, b.format, b.shelf_id, b.do_not_lend, b.wishlist_priority, b.notes, b.updated_at,
               e.id AS edition_id, e.title, e.authors, e.cover_url, e.isbn, e.language
        FROM book b JOIN edition e ON e.id = b.edition_id
        WHERE b.id = $1 AND b.deleted_at IS NULL`,
@@ -154,6 +172,7 @@ books.get("/:id", async (c) => {
     do_not_lend: row.do_not_lend,
     wishlist_priority: row.wishlist_priority,
     notes: row.notes,
+    updated_at: row.updated_at,
     edition: {
       id: row.edition_id,
       title: row.title,
@@ -190,13 +209,14 @@ books.patch("/:id", async (c) => {
   // Re-select the updated book with edition to return nested structure
   const { rows: bookRows } = await withUser(user.id, (client) =>
     client.query(
-      `SELECT b.id, b.ownership, b.format, b.shelf_id, b.do_not_lend, b.wishlist_priority, b.notes,
+      `SELECT b.id, b.ownership, b.format, b.shelf_id, b.do_not_lend, b.wishlist_priority, b.notes, b.updated_at,
               e.id AS edition_id, e.title, e.authors, e.cover_url, e.isbn, e.language
        FROM book b JOIN edition e ON e.id = b.edition_id
        WHERE b.id = $1 AND b.deleted_at IS NULL`,
       [c.req.param("id")]
     )
   );
+  if (!bookRows[0]) return c.json({ error: "not found" }, 404);
   const row = bookRows[0];
   const book = {
     id: row.id,
@@ -206,6 +226,7 @@ books.patch("/:id", async (c) => {
     do_not_lend: row.do_not_lend,
     wishlist_priority: row.wishlist_priority,
     notes: row.notes,
+    updated_at: row.updated_at,
     edition: {
       id: row.edition_id,
       title: row.title,

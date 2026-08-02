@@ -66,6 +66,29 @@ describe("books", () => {
     expect(res.status).toBe(401);
   });
 
+  it("creates a book by reusing an existing editionId", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+
+    // Create first book with inline edition
+    const first = await addBook(cookie, house.id, "Sapiens");
+    expect(first.status).toBe(201);
+    const editionId = first.body.book.edition.id;
+
+    // Create second book reusing the same edition
+    const res = await app.request("/api/books", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ householdId: house.id, editionId, ownership: "borrowed_in" }),
+    });
+    expect(res.status).toBe(201);
+    const { book: second } = await res.json();
+    expect(second.id).toBeTruthy();
+    expect(second.edition.id).toBe(editionId);
+    expect(second.edition.title).toBe("Sapiens");
+    expect(second.ownership).toBe("borrowed_in");
+  });
+
   it("GET /:id returns a single book with nested edition", async () => {
     const { cookie } = await signUp(app);
     const house = await createHousehold(cookie);
@@ -91,6 +114,7 @@ describe("books", () => {
     const house = await createHousehold(cookie);
     const created = await addBook(cookie, house.id, "Sapiens");
     const bookId = created.body.book.id;
+    const originalUpdatedAt = created.body.book.updated_at;
 
     const updateRes = await app.request(`/api/books/${bookId}`, {
       method: "PATCH",
@@ -101,6 +125,8 @@ describe("books", () => {
     const { book: updated } = await updateRes.json();
     expect(updated.notes).toBe("Great book!");
     expect(updated.edition.title).toBe("Sapiens");
+    expect(updated.updated_at).toBeTruthy();
+    expect(new Date(updated.updated_at) > new Date(originalUpdatedAt)).toBe(true);
   });
 
   it("PATCH /:id with empty body returns 400", async () => {
