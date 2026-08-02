@@ -5,6 +5,7 @@ import { withUser } from "./db/tenant.js";
 import { households } from "./routes/households.js";
 import { householdInvites, invites } from "./routes/invites.js";
 import { books } from "./routes/books.js";
+import { editions } from "./routes/editions.js";
 
 export const app = new Hono();
 
@@ -32,3 +33,4 @@ app.route("/api/households", households);
 app.route("/api/households/:householdId/invites", householdInvites);
 app.route("/api/invites", invites);
 app.route("/api/books", books);
+app.route("/api/editions", editions);
