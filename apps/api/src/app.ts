@@ -4,6 +4,7 @@ import { requireUser } from "./middleware/session.js";
 import { withUser } from "./db/tenant.js";
 import { households } from "./routes/households.js";
 import { householdInvites, invites } from "./routes/invites.js";
+import { books } from "./routes/books.js";
 
 export const app = new Hono();
 
@@ -30,3 +31,4 @@ app.get("/api/me", requireUser, async (c) => {
 app.route("/api/households", households);
 app.route("/api/households/:householdId/invites", householdInvites);
 app.route("/api/invites", invites);
+app.route("/api/books", books);
