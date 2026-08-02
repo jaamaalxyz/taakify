@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { randomUUID } from "node:crypto";
 import { app } from "../src/app.js";
 import { signUp } from "./helpers.js";
 
@@ -63,5 +64,98 @@ describe("books", () => {
   it("requires auth", async () => {
     const res = await app.request("/api/books");
     expect(res.status).toBe(401);
+  });
+
+  it("GET /:id returns a single book with nested edition", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const created = await addBook(cookie, house.id, "Sapiens");
+    const bookId = created.body.book.id;
+
+    const res = await app.request(`/api/books/${bookId}`, { headers: { cookie } });
+    expect(res.status).toBe(200);
+    const { book } = await res.json();
+    expect(book.id).toBe(bookId);
+    expect(book.edition.title).toBe("Sapiens");
+    expect(book.edition.id).toBeTruthy();
+  });
+
+  it("GET /:id returns 404 for nonexistent book", async () => {
+    const { cookie } = await signUp(app);
+    const res = await app.request(`/api/books/${randomUUID()}`, { headers: { cookie } });
+    expect(res.status).toBe(404);
+  });
+
+  it("PATCH /:id updates a book field", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const created = await addBook(cookie, house.id, "Sapiens");
+    const bookId = created.body.book.id;
+
+    const updateRes = await app.request(`/api/books/${bookId}`, {
+      method: "PATCH",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ notes: "Great book!" }),
+    });
+    expect(updateRes.status).toBe(200);
+    const { book: updated } = await updateRes.json();
+    expect(updated.notes).toBe("Great book!");
+    expect(updated.edition.title).toBe("Sapiens");
+  });
+
+  it("PATCH /:id with empty body returns 400", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const created = await addBook(cookie, house.id, "Sapiens");
+    const bookId = created.body.book.id;
+
+    const res = await app.request(`/api/books/${bookId}`, {
+      method: "PATCH",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("nothing to update");
+  });
+
+  it("PATCH /:id returns 404 for nonexistent book", async () => {
+    const { cookie } = await signUp(app);
+    const res = await app.request(`/api/books/${randomUUID()}`, {
+      method: "PATCH",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ notes: "test" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("DELETE /:id soft-deletes a book", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const created = await addBook(cookie, house.id, "Sapiens");
+    const bookId = created.body.book.id;
+
+    const deleteRes = await app.request(`/api/books/${bookId}`, {
+      method: "DELETE",
+      headers: { cookie },
+    });
+    expect(deleteRes.status).toBe(200);
+
+    // Verify it no longer appears in list
+    const listRes = await app.request(`/api/books?householdId=${house.id}`, { headers: { cookie } });
+    const list = await listRes.json();
+    expect(list.books).toHaveLength(0);
+
+    // Verify GET /:id returns 404
+    const getRes = await app.request(`/api/books/${bookId}`, { headers: { cookie } });
+    expect(getRes.status).toBe(404);
+  });
+
+  it("DELETE /:id returns 404 for nonexistent book", async () => {
+    const { cookie } = await signUp(app);
+    const res = await app.request(`/api/books/${randomUUID()}`, {
+      method: "DELETE",
+      headers: { cookie },
+    });
+    expect(res.status).toBe(404);
   });
 });

@@ -84,30 +84,51 @@ books.post("/", async (c) => {
   if (!body?.householdId || !body?.ownership) return c.json({ error: "householdId and ownership required" }, 400);
   if (!body.editionId && !body.edition?.title) return c.json({ error: "editionId or edition.title required" }, 400);
 
-  const book = await withUser(user.id, async (client) => {
+  const result = await withUser(user.id, async (client) => {
     let editionId = body.editionId;
+    let editionData = body.edition;
     if (!editionId && body.edition) {
       const e = await client.query(
         `INSERT INTO edition (id, isbn, title, authors, language, cover_url)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, isbn, title, authors, language, cover_url`,
         [randomUUID(), body.edition.isbn ?? null, body.edition.title, body.edition.authors ?? "", body.edition.language ?? null, body.edition.cover_url ?? null]
       );
       editionId = e.rows[0].id;
+      editionData = e.rows[0];
     }
-    const { rows } = await client.query(
+    const bookId = randomUUID();
+    const { rowCount } = await client.query(
       `INSERT INTO book (id, household_id, edition_id, ownership, shelf_id, do_not_lend, wishlist_priority, notes, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id, household_id, edition_id, ownership, shelf_id, do_not_lend, wishlist_priority, notes`,
-      [randomUUID(), body.householdId, editionId, body.ownership, body.shelf_id ?? null, body.do_not_lend ?? false, body.wishlist_priority ?? null, body.notes ?? null, user.id]
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [bookId, body.householdId, editionId, body.ownership, body.shelf_id ?? null, body.do_not_lend ?? false, body.wishlist_priority ?? null, body.notes ?? null, user.id]
     );
-    return rows[0];
+    if (!rowCount) return null;
+    return { bookId, editionId, editionData };
   }).catch((err) => {
     // RLS insert policy rejects cross-household writes -> Postgres raises SQLSTATE 42501.
     // Match on err.code, not err.message text (message wording isn't a stable contract).
     if ((err as { code?: string }).code === "42501") return null;
     throw err;
   });
-  if (!book) return c.json({ error: "forbidden" }, 403);
+  if (!result) return c.json({ error: "forbidden" }, 403);
+  const book = {
+    id: result.bookId,
+    household_id: body.householdId,
+    edition_id: result.editionId,
+    ownership: body.ownership,
+    shelf_id: body.shelf_id ?? null,
+    do_not_lend: body.do_not_lend ?? false,
+    wishlist_priority: body.wishlist_priority ?? null,
+    notes: body.notes ?? null,
+    edition: {
+      id: result.editionId,
+      title: result.editionData.title,
+      authors: result.editionData.authors ?? "",
+      cover_url: result.editionData.cover_url ?? null,
+      isbn: result.editionData.isbn ?? null,
+      language: result.editionData.language ?? null,
+    }
+  };
   return c.json({ book }, 201);
 });
 
@@ -116,14 +137,33 @@ books.get("/:id", async (c) => {
   const user = c.get("user");
   const { rows } = await withUser(user.id, (client) =>
     client.query(
-      `SELECT b.*, e.title, e.authors, e.cover_url, e.isbn, e.language
+      `SELECT b.id, b.ownership, b.format, b.shelf_id, b.do_not_lend, b.wishlist_priority, b.notes,
+              e.id AS edition_id, e.title, e.authors, e.cover_url, e.isbn, e.language
        FROM book b JOIN edition e ON e.id = b.edition_id
        WHERE b.id = $1 AND b.deleted_at IS NULL`,
       [c.req.param("id")]
     )
   );
   if (!rows[0]) return c.json({ error: "not found" }, 404);
-  return c.json({ book: rows[0] });
+  const row = rows[0];
+  const book = {
+    id: row.id,
+    ownership: row.ownership,
+    format: row.format,
+    shelf_id: row.shelf_id,
+    do_not_lend: row.do_not_lend,
+    wishlist_priority: row.wishlist_priority,
+    notes: row.notes,
+    edition: {
+      id: row.edition_id,
+      title: row.title,
+      authors: row.authors,
+      cover_url: row.cover_url,
+      isbn: row.isbn,
+      language: row.language,
+    }
+  };
+  return c.json({ book });
 });
 
 // PATCH /api/books/:id — move shelf, edit fields.
@@ -141,12 +181,41 @@ books.patch("/:id", async (c) => {
   const { rows } = await withUser(user.id, (client) =>
     client.query(
       `UPDATE book SET ${sets.join(", ")}, updated_at = now()
-       WHERE id = $1 AND deleted_at IS NULL RETURNING *`,
+       WHERE id = $1 AND deleted_at IS NULL RETURNING id`,
       params
     )
   );
   if (!rows[0]) return c.json({ error: "not found" }, 404);
-  return c.json({ book: rows[0] });
+
+  // Re-select the updated book with edition to return nested structure
+  const { rows: bookRows } = await withUser(user.id, (client) =>
+    client.query(
+      `SELECT b.id, b.ownership, b.format, b.shelf_id, b.do_not_lend, b.wishlist_priority, b.notes,
+              e.id AS edition_id, e.title, e.authors, e.cover_url, e.isbn, e.language
+       FROM book b JOIN edition e ON e.id = b.edition_id
+       WHERE b.id = $1 AND b.deleted_at IS NULL`,
+      [c.req.param("id")]
+    )
+  );
+  const row = bookRows[0];
+  const book = {
+    id: row.id,
+    ownership: row.ownership,
+    format: row.format,
+    shelf_id: row.shelf_id,
+    do_not_lend: row.do_not_lend,
+    wishlist_priority: row.wishlist_priority,
+    notes: row.notes,
+    edition: {
+      id: row.edition_id,
+      title: row.title,
+      authors: row.authors,
+      cover_url: row.cover_url,
+      isbn: row.isbn,
+      language: row.language,
+    }
+  };
+  return c.json({ book });
 });
 
 // DELETE /api/books/:id — soft delete.
