@@ -6,6 +6,7 @@ import { households } from "./routes/households.js";
 import { householdInvites, invites } from "./routes/invites.js";
 import { books } from "./routes/books.js";
 import { editions } from "./routes/editions.js";
+import { bookcases, shelves } from "./routes/shelves.js";
 
 export const app = new Hono();
 
@@ -34,3 +35,5 @@ app.route("/api/households/:householdId/invites", householdInvites);
 app.route("/api/invites", invites);
 app.route("/api/books", books);
 app.route("/api/editions", editions);
+app.route("/api/bookcases", bookcases);
+app.route("/api/shelves", shelves);
