@@ -6,11 +6,11 @@
 
 **Architecture:** pnpm monorepo with a Hono (Node) API and a Vite React SPA. Postgres (wal_level=logical, ready for ElectricSQL) and Electric run in Docker Compose for dev. better-auth handles email/password and Google sign-in sessions. Two DB pools: a privileged pool (migrations, auth tables, service operations like household creation and invite acceptance) and an RLS-enforced app pool (`taakify_app` role) for all tenant data. Tenancy is enforced by RLS policies keyed on a per-transaction `app.user_id` setting via a `SECURITY DEFINER` membership-lookup function.
 
-**Tech Stack:** Node 22, pnpm, TypeScript, Hono, better-auth, pg (no ORM — hand-written SQL matches the PGlite client-side idiom coming in Plan 2), Vitest, Vite, React 19, react-router.
+**Tech Stack:** Node 24 (active LTS), pnpm, TypeScript, Hono, better-auth, pg (no ORM — hand-written SQL matches the PGlite client-side idiom coming in Plan 2), Vitest, Vite, React 19, react-router.
 
 **Spec:** `docs/superpowers/specs/2026-07-16-taakify-bookshelf-design.md`
 
-**Prerequisites (verify before starting):** Docker + Docker Compose, Node 22 (`node -v`), pnpm 9+ (`corepack enable && corepack prepare pnpm@latest --activate`).
+**Prerequisites (verify before starting):** Docker + Docker Compose, Node 24 (`node -v`), pnpm 9+ (`corepack enable && corepack prepare pnpm@latest --activate`).
 
 **Google OAuth prerequisite (user action, can be done anytime before Task 11):** In [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an OAuth 2.0 Client ID (type: Web application) with authorized redirect URI `http://localhost:5173/api/auth/callback/google` (add the production URL in Plan 5). Put the client ID/secret in `apps/api/.env`. Google sign-in is **conditionally enabled** — the app runs fine without these credentials; the Google button simply won't work until they're set.
 
@@ -111,13 +111,13 @@ packages:
     "migrate": "pnpm --filter @taakify/api migrate",
     "test": "pnpm --filter @taakify/api test"
   },
-  "engines": { "node": ">=22" }
+  "engines": { "node": ">=24" }
 }
 ```
 
 `.nvmrc`:
 ```
-22
+24
 ```
 
 `.gitignore`:
@@ -231,7 +231,7 @@ git commit -m "chore: dev docker compose with postgres (logical wal) and electri
     "pg": "^8.13.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
+    "@types/node": "^24.0.0",
     "@types/pg": "^8.11.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

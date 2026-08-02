@@ -1,0 +1,9 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { margin: 0; display: grid; place-items: center; min-height: 100dvh; }
+main { width: min(420px, 92vw); padding: 1.5rem; }
+h1 { font-size: 1.4rem; }
+form { display: grid; gap: 0.75rem; }
+input, button { font: inherit; padding: 0.65rem 0.8rem; border-radius: 8px; border: 1px solid #8886; }
+button { cursor: pointer; font-weight: 600; }
+.error { color: #c0392b; }
+.muted { opacity: 0.7; font-size: 0.9rem; }
