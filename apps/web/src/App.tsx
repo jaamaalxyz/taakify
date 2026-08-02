@@ -5,10 +5,20 @@ import { SignIn } from "./pages/SignIn.js";
 import { Onboarding } from "./pages/Onboarding.js";
 import { InviteAccept } from "./pages/InviteAccept.js";
 import { Home } from "./pages/Home.js";
+import { Skeleton } from "./components/ui/skeleton.js";
+import { useTheme } from "./lib/use-theme.js";
 
 export function App() {
+  useTheme();
   const { data: session, isPending } = authClient.useSession();
-  if (isPending) return <main className="muted">Loading…</main>;
+
+  if (isPending)
+    return (
+      <main className="flex min-h-dvh items-center justify-center p-4">
+        <Skeleton className="h-8 w-40" />
+      </main>
+    );
+
   const authed = Boolean(session);
 
   return (
