@@ -60,6 +60,22 @@ describe("Home", () => {
     });
   });
 
+  it("copies the invite link to the clipboard when the copy button is clicked", async () => {
+    vi.mocked(api).mockResolvedValueOnce(me);
+    renderHome();
+    await screen.findByText("Family Library");
+
+    await userEvent.click(screen.getByRole("button", { name: /Invite a family member/ }));
+    vi.mocked(api).mockResolvedValueOnce({ url: "/invite/tok123" });
+    await userEvent.type(screen.getByLabelText("Email"), "friend@example.com");
+    await userEvent.click(screen.getByRole("button", { name: "Send invite" }));
+    await screen.findByDisplayValue(/\/invite\/tok123$/);
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy invite link" }));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(`${location.origin}/invite/tok123`);
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
+  });
+
   it("signs out when the sign-out button is clicked", async () => {
     vi.mocked(api).mockResolvedValueOnce(me);
     vi.mocked(authClient.signOut).mockResolvedValue(undefined as never);

@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { Copy, LogOut, UserPlus, BookOpen } from "lucide-react";
+import { Copy, Check, LogOut, UserPlus, BookOpen } from "lucide-react";
 import { api, type Me } from "../lib/api.js";
 import { authClient } from "../lib/auth.js";
 import { Button } from "../components/ui/button.js";
@@ -35,6 +35,7 @@ export function Home() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [inviteUrl, setInviteUrl] = useState("");
   const [inviteError, setInviteError] = useState("");
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     api<Me>("/api/me").then(setMe).catch((e) => setLoadError((e as Error).message));
@@ -60,7 +61,14 @@ export function Home() {
     if (!open) {
       setInviteUrl("");
       setInviteError("");
+      setCopied(false);
     }
+  }
+
+  async function copyInviteUrl() {
+    await navigator.clipboard.writeText(inviteUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
   if (loadError)
@@ -146,10 +154,10 @@ export function Home() {
                 type="button"
                 variant="outline"
                 size="icon"
-                aria-label="Copy invite link"
-                onClick={() => navigator.clipboard.writeText(inviteUrl)}
+                aria-label={copied ? "Copied" : "Copy invite link"}
+                onClick={copyInviteUrl}
               >
-                <Copy className="h-4 w-4" />
+                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
               </Button>
             </div>
           ) : (

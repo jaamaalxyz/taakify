@@ -7,6 +7,11 @@ Object.defineProperty(window, "location", {
   value: { ...window.location, reload: vi.fn() },
 });
 
+Object.defineProperty(navigator, "clipboard", {
+  configurable: true,
+  value: { writeText: vi.fn().mockResolvedValue(undefined) },
+});
+
 Object.defineProperty(window, "matchMedia", {
   configurable: true,
   value: vi.fn().mockImplementation((query) => ({
