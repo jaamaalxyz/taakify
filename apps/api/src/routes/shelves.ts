@@ -72,8 +72,13 @@ bookcases.post("/:id/shelves", async (c) => {
   const body = await c.req.json<{ label?: string }>().catch(() => ({}) as { label?: string });
 
   const result = await withUser(user.id, async (client) => {
+    // Lock the parent bookcase row first so concurrent POSTs to the same
+    // bookcase serialize: the second transaction blocks here until the
+    // first commits, and then sees the updated MAX(position) below. Without
+    // this, two concurrent requests can both read the same MAX(position)
+    // under READ COMMITTED and insert duplicate positions.
     const { rows: bcRows } = await client.query(
-      "SELECT id, household_id FROM bookcase WHERE id = $1 AND deleted_at IS NULL",
+      "SELECT id, household_id FROM bookcase WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
       [bookcaseId]
     );
     if (!bcRows[0]) return "not_found" as const;

@@ -97,6 +97,30 @@ describe("bookcases + shelves", () => {
     ]);
   });
 
+  it("concurrent POST /:id/shelves calls never produce duplicate positions", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const bc = await addBookcase(cookie, house.id);
+
+    const post = async (label: string) => {
+      const res = await app.request(`/api/bookcases/${bc.body.bookcase.id}/shelves`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ label }),
+      });
+      return res.json();
+    };
+
+    const results = await Promise.all([
+      post("Concurrent A"),
+      post("Concurrent B"),
+      post("Concurrent C"),
+    ]);
+    const positions = results.map((r: any) => r.shelf.position).sort((a: number, b: number) => a - b);
+    expect(positions).toEqual([1, 2, 3]);
+    expect(new Set(positions).size).toBe(3);
+  });
+
   it("POST /:id/shelves returns 404 for a nonexistent bookcase", async () => {
     const { cookie } = await signUp(app);
     const res = await app.request(`/api/bookcases/${randomUUID()}/shelves`, {

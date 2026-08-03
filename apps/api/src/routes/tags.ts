@@ -78,6 +78,16 @@ bookTags.post("/:bookId/tags", async (c) => {
     if (!bookRows[0]) return "not_found" as const;
     const householdId = bookRows[0].household_id;
 
+    // A caller can belong to multiple households; without this check they
+    // could attach a tag from household B to a book in household A (RLS only
+    // scopes the new book_tag row's own household_id to *a* household the
+    // caller belongs to, not necessarily the book's household).
+    const { rows: tagRows } = await client.query(
+      "SELECT household_id FROM tag WHERE id = $1 AND deleted_at IS NULL",
+      [body.tagId]
+    );
+    if (!tagRows[0] || tagRows[0].household_id !== householdId) return "not_found" as const;
+
     const { rows } = await client.query(
       `INSERT INTO book_tag (household_id, book_id, tag_id)
        VALUES ($1, $2, $3) RETURNING id, book_id, tag_id, updated_at`,

@@ -30,6 +30,21 @@ async function addTag(cookie: string, householdId: string, name: string) {
   return { status: res.status, body: await res.json() };
 }
 
+// Invites the given cookie's user into householdId, using ownerCookie's
+// admin/owner privileges, and returns the now-dual-household session cookie.
+async function inviteAndJoin(ownerCookie: string, householdId: string, joinerCookie: string) {
+  const invRes = await app.request(`/api/households/${householdId}/invites`, {
+    method: "POST",
+    headers: { cookie: ownerCookie, "content-type": "application/json" },
+    body: JSON.stringify({ email: `${randomUUID()}@test.local`, role: "member" }),
+  });
+  const invite = (await invRes.json()) as { token: string };
+  await app.request(`/api/invites/${invite.token}/accept`, {
+    method: "POST",
+    headers: { cookie: joinerCookie },
+  });
+}
+
 describe("tags", () => {
   it("creates a tag and lists it", async () => {
     const { cookie } = await signUp(app);
@@ -139,6 +154,29 @@ describe("tags", () => {
     const res = await app.request(`/api/books/${book.id}/tags/${tag.body.tag.id}`, {
       method: "DELETE",
       headers: { cookie },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("a user in two households cannot attach household B's tag to household A's book", async () => {
+    const a = await signUp(app);
+    const houseA = await createHousehold(a.cookie, "A");
+    const book = await addBook(a.cookie, houseA.id, "Sapiens");
+
+    // b owns household B and has its own tag.
+    const b = await signUp(app);
+    const houseB = await createHousehold(b.cookie, "B");
+    const tagB = await addTag(b.cookie, houseB.id, "b-only");
+
+    // a joins household B too, so a's RLS membership check alone would allow
+    // inserting a book_tag row scoped to household B's household_id — the
+    // route must additionally verify the tag's household matches the book's.
+    await inviteAndJoin(b.cookie, houseB.id, a.cookie);
+
+    const res = await app.request(`/api/books/${book.id}/tags`, {
+      method: "POST",
+      headers: { cookie: a.cookie, "content-type": "application/json" },
+      body: JSON.stringify({ tagId: tagB.body.tag.id }),
     });
     expect(res.status).toBe(404);
   });
