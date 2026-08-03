@@ -21,9 +21,9 @@ readingStatus.put("/:bookId/status", async (c) => {
     finished_at?: string;
     rating?: number;
     review_note?: string;
-  }>().catch(() => ({}) as { status?: string });
+  }>().catch(() => null);
 
-  if (!body.status || !VALID_STATUSES.includes(body.status)) {
+  if (!body?.status || !VALID_STATUSES.includes(body.status)) {
     return c.json({ error: "status must be one of " + VALID_STATUSES.join(", ") }, 400);
   }
   if (body.rating !== undefined && (body.rating < 1 || body.rating > 5)) {
