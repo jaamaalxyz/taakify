@@ -8,6 +8,7 @@ import { books } from "./routes/books.js";
 import { editions } from "./routes/editions.js";
 import { bookcases, shelves } from "./routes/shelves.js";
 import { readingStatus } from "./routes/reading-status.js";
+import { tags, bookTags } from "./routes/tags.js";
 
 export const app = new Hono();
 
@@ -39,3 +40,5 @@ app.route("/api/editions", editions);
 app.route("/api/bookcases", bookcases);
 app.route("/api/shelves", shelves);
 app.route("/api/books", readingStatus);
+app.route("/api/tags", tags);
+app.route("/api/books", bookTags);
