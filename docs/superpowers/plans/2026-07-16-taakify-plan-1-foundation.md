@@ -1,12 +1,19 @@
 # Taakify Plan 1: Foundation Implementation Plan
 
+> **Renumbering note:** the plans below were reordered for feature-first
+> delivery after this document was written — Books now precedes Sync
+> (Books is Plan 2, Sync is Plan 3). Any "Plan 2" reference in this document
+> refers to the *old* numbering (sync) unless otherwise fixed inline. See
+> `docs/superpowers/specs/2026-08-02-taakify-books-design.md` §3 for the
+> rationale.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Monorepo + dev infrastructure + full database schema with RLS + auth + household/membership/invite flows, ending with: you can sign up, create your household, and invite a family member who joins it.
 
 **Architecture:** pnpm monorepo with a Hono (Node) API and a Vite React SPA. Postgres (wal_level=logical, ready for ElectricSQL) and Electric run in Docker Compose for dev. better-auth handles email/password and Google sign-in sessions. Two DB pools: a privileged pool (migrations, auth tables, service operations like household creation and invite acceptance) and an RLS-enforced app pool (`taakify_app` role) for all tenant data. Tenancy is enforced by RLS policies keyed on a per-transaction `app.user_id` setting via a `SECURITY DEFINER` membership-lookup function.
 
-**Tech Stack:** Node 24 (active LTS), pnpm, TypeScript, Hono, better-auth, pg (no ORM — hand-written SQL matches the PGlite client-side idiom coming in Plan 2), Vitest, Vite, React 19, react-router.
+**Tech Stack:** Node 24 (active LTS), pnpm, TypeScript, Hono, better-auth, pg (no ORM — hand-written SQL matches the PGlite client-side idiom coming in Plan 3, Sync), Vitest, Vite, React 19, react-router.
 
 **Spec:** `docs/superpowers/specs/2026-07-16-taakify-bookshelf-design.md`
 
@@ -82,7 +89,7 @@ taakify/
 └── docs/superpowers/...               # (already exists)
 ```
 
-`packages/shared` is deliberately absent — it arrives in Plan 2 when client and server first share sync types.
+`packages/shared` is deliberately absent — it arrives in Plan 3 when client and server first share sync types.
 
 ---
 
@@ -191,7 +198,7 @@ Run: `docker compose -f docker-compose.dev.yml up -d && sleep 5 && docker compos
 Expected: both `postgres` and `electric` show `running`; postgres healthy.
 
 Run: `docker compose -f docker-compose.dev.yml logs electric | tail -5`
-Expected: no crash loop (Electric connected to Postgres). Electric is otherwise unused until Plan 2 — booting it now proves our Postgres config (wal_level=logical) is Electric-compatible.
+Expected: no crash loop (Electric connected to Postgres). Electric is otherwise unused until Plan 3 — booting it now proves our Postgres config (wal_level=logical) is Electric-compatible.
 
 - [ ] **Step 3: Commit**
 
@@ -1900,4 +1907,4 @@ git push
 - `pnpm test` green: health, auth, RLS isolation (3 tests), households (3), invites (3).
 - Manual journey verified: sign up → create household → invite → second user joins → third user's household is isolated.
 - Full domain schema (all 12 spec tables + auth tables) migrated with RLS enforced for the app role.
-- Electric container boots against the dev Postgres (proves wal_level config) — actual sync is Plan 2.
+- Electric container boots against the dev Postgres (proves wal_level config) — actual sync is Plan 3.
