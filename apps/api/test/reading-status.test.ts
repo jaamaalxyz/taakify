@@ -172,4 +172,35 @@ describe("reading status", () => {
     const res = await app.request(`/api/books/${randomUUID()}/status`);
     expect(res.status).toBe(401);
   });
+
+  // Regression test for a UTC-shift bug: pg's DATE parser returns a JS Date
+  // at local midnight, and naive JSON serialization (toISOString()) renders
+  // that in UTC, shifting the calendar day in non-UTC timezones. Both the
+  // PUT response and every row of the GET response must echo back exactly
+  // the date strings that were sent, not a UTC-shifted variant.
+  it("PUT and GET echo back started_at/finished_at exactly as sent, unshifted by UTC serialization", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const book = await addBook(cookie, house.id, "Sapiens");
+
+    const startedAt = "2026-01-31";
+    const finishedAt = "2026-02-01";
+
+    const put = await app.request(`/api/books/${book.id}/status`, {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ status: "finished", started_at: startedAt, finished_at: finishedAt }),
+    });
+    expect(put.status).toBe(200);
+    const putBody = await put.json();
+    expect(putBody.status.started_at).toBe(startedAt);
+    expect(putBody.status.finished_at).toBe(finishedAt);
+
+    const get = await app.request(`/api/books/${book.id}/status`, { headers: { cookie } });
+    expect(get.status).toBe(200);
+    const getBody = await get.json();
+    expect(getBody.statuses).toHaveLength(1);
+    expect(getBody.statuses[0].started_at).toBe(startedAt);
+    expect(getBody.statuses[0].finished_at).toBe(finishedAt);
+  });
 });

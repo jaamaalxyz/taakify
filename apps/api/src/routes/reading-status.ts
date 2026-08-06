@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { withUser } from "../db/tenant.js";
 import { requireUser, type SessionUser } from "../middleware/session.js";
+import { dateStr } from "../lib/date.js";
 
 export const readingStatus = new Hono<{ Variables: { user: SessionUser } }>();
 
@@ -68,7 +69,13 @@ readingStatus.put("/:bookId/status", async (c) => {
 
   if (result === "forbidden") return c.json({ error: "forbidden" }, 403);
   if (!result) return c.json({ error: "not found" }, 404);
-  return c.json({ status: result });
+  return c.json({
+    status: {
+      ...result,
+      started_at: dateStr(result.started_at),
+      finished_at: dateStr(result.finished_at),
+    },
+  });
 });
 
 // GET /api/books/:bookId/status — all members' status rows for the book.
@@ -94,5 +101,11 @@ readingStatus.get("/:bookId/status", async (c) => {
   });
 
   if (!result) return c.json({ error: "not found" }, 404);
-  return c.json({ statuses: result });
+  return c.json({
+    statuses: result.map((row: any) => ({
+      ...row,
+      started_at: dateStr(row.started_at),
+      finished_at: dateStr(row.finished_at),
+    })),
+  });
 });

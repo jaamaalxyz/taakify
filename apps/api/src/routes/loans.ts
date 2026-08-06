@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { withUser } from "../db/tenant.js";
 import { requireUser, type SessionUser } from "../middleware/session.js";
+import { dateStr } from "../lib/date.js";
 
 export const loans = new Hono<{ Variables: { user: SessionUser } }>();
 
@@ -18,19 +19,6 @@ const NESTED_SELECT = `
   JOIN edition e ON e.id = b.edition_id
   JOIN contact c ON c.id = l.contact_id
 `;
-
-// pg's default DATE parser returns a JS Date at local midnight; letting
-// JSON.stringify serialize it via toISOString() converts to UTC and can
-// shift the calendar day (visible in this repo's local -6h test env, and a
-// real bug in any +UTC server timezone). Format explicitly from the local
-// date components pg used to build the Date, instead.
-function dateStr(d: unknown): string | null {
-  if (!(d instanceof Date)) return (d as string | null) ?? null;
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
 
 function nestLoan(row: any) {
   return {
