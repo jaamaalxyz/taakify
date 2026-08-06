@@ -86,10 +86,17 @@ export function BookDetail() {
   const [statuses, setStatuses] = useState<Status[] | null>(null);
   const [loadError, setLoadError] = useState("");
 
-  // My-status editor fields.
+  // My-status editor fields. started_at/finished_at have no UI on this
+  // screen yet, but PUT /:bookId/status is a full-replace upsert (every
+  // column gets overwritten with EXCLUDED.*, not just the ones sent) — so
+  // we still have to capture and echo them back unmodified on every save,
+  // or saving status/rating/note here would silently null out any dates
+  // already on the row.
   const [myStatus, setMyStatus] = useState<ReadingStatus>("unread");
   const [myRating, setMyRating] = useState<string>("");
   const [myNote, setMyNote] = useState("");
+  const [myStartedAt, setMyStartedAt] = useState<string | null>(null);
+  const [myFinishedAt, setMyFinishedAt] = useState<string | null>(null);
   const [savingStatus, setSavingStatus] = useState(false);
   const [statusError, setStatusError] = useState("");
 
@@ -116,6 +123,11 @@ export function BookDetail() {
   const [editNotes, setEditNotes] = useState("");
   const [editDoNotLend, setEditDoNotLend] = useState(false);
   const [editPriority, setEditPriority] = useState<WishlistPriority | "none">("none");
+  // Separate error/loading state per dialog — sharing one pair between
+  // move-shelf and edit-details meant an error from one dialog stayed
+  // visible after closing it and opening the other.
+  const [savingShelf, setSavingShelf] = useState(false);
+  const [shelfError, setShelfError] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -147,6 +159,8 @@ export function BookDetail() {
           setMyStatus(mine.status);
           setMyRating(mine.rating ? String(mine.rating) : "");
           setMyNote(mine.review_note ?? "");
+          setMyStartedAt(mine.started_at);
+          setMyFinishedAt(mine.finished_at);
         }
       })
       .catch((e) => setLoadError((e as Error).message));
@@ -189,6 +203,8 @@ export function BookDetail() {
           status: myStatus,
           rating: myRating ? Number(myRating) : undefined,
           review_note: myNote.trim() || undefined,
+          started_at: myStartedAt ?? undefined,
+          finished_at: myFinishedAt ?? undefined,
         }),
       });
       toast("Status updated");
@@ -252,8 +268,8 @@ export function BookDetail() {
 
   async function handleMoveShelf() {
     if (!bookId) return;
-    setEditError("");
-    setSavingEdit(true);
+    setShelfError("");
+    setSavingShelf(true);
     try {
       const data = await api<{ book: Book }>(`/api/books/${bookId}`, {
         method: "PATCH",
@@ -263,9 +279,9 @@ export function BookDetail() {
       toast("Shelf updated");
       setMoveShelfOpen(false);
     } catch (err) {
-      setEditError((err as Error).message);
+      setShelfError((err as Error).message);
     } finally {
-      setSavingEdit(false);
+      setSavingShelf(false);
     }
   }
 
@@ -521,14 +537,20 @@ export function BookDetail() {
       </section>
 
       {/* Move shelf dialog */}
-      <Dialog open={moveShelfOpen} onOpenChange={setMoveShelfOpen}>
+      <Dialog
+        open={moveShelfOpen}
+        onOpenChange={(open) => {
+          setMoveShelfOpen(open);
+          if (!open) setShelfError("");
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Move shelf</DialogTitle>
             <DialogDescription>Choose a new shelf for this book.</DialogDescription>
           </DialogHeader>
           <Select value={moveShelfId} onValueChange={setMoveShelfId}>
-            <SelectTrigger className="w-full">
+            <SelectTrigger className="w-full" aria-label="Shelf">
               <SelectValue placeholder="No shelf" />
             </SelectTrigger>
             <SelectContent>
@@ -542,21 +564,27 @@ export function BookDetail() {
               )}
             </SelectContent>
           </Select>
-          {editError && (
+          {shelfError && (
             <Alert variant="destructive">
-              <AlertDescription>{editError}</AlertDescription>
+              <AlertDescription>{shelfError}</AlertDescription>
             </Alert>
           )}
           <DialogFooter>
-            <Button onClick={handleMoveShelf} disabled={savingEdit}>
-              {savingEdit ? "Saving…" : "Move"}
+            <Button onClick={handleMoveShelf} disabled={savingShelf}>
+              {savingShelf ? "Saving…" : "Move"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* Edit details dialog */}
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+      <Dialog
+        open={editOpen}
+        onOpenChange={(open) => {
+          setEditOpen(open);
+          if (!open) setEditError("");
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit book</DialogTitle>

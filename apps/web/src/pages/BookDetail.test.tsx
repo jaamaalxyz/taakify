@@ -69,6 +69,13 @@ const statuses = [
   },
 ];
 
+const bookcase = {
+  id: "bc1",
+  name: "Living Room",
+  updated_at: "2026-01-01T00:00:00Z",
+  shelves: [{ id: "s1", position: 0, label: "Top Shelf", updated_at: "2026-01-01T00:00:00Z" }],
+};
+
 function mockApi({
   statusList = statuses,
   putStatus,
@@ -76,6 +83,9 @@ function mockApi({
   postTag,
   postBookTag,
   del,
+  delTag,
+  bookcases = [bookcase],
+  patchBook,
 }: {
   statusList?: typeof statuses;
   putStatus?: (body: Record<string, unknown>) => unknown;
@@ -83,6 +93,9 @@ function mockApi({
   postTag?: (body: Record<string, unknown>) => unknown;
   postBookTag?: (body: Record<string, unknown>) => unknown;
   del?: () => unknown;
+  delTag?: () => unknown;
+  bookcases?: (typeof bookcase)[];
+  patchBook?: (body: Record<string, unknown>) => unknown;
 } = {}) {
   vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
@@ -92,7 +105,7 @@ function mockApi({
       const body = init?.body ? JSON.parse(init.body as string) : {};
       return putStatus ? putStatus(body) : { status: { ...statuses[0], ...body } };
     }
-    if (path.startsWith("/api/bookcases")) return { bookcases: [] };
+    if (path.startsWith("/api/bookcases")) return { bookcases };
     if (path.startsWith("/api/tags") && method === "GET") return { tags };
     if (path === "/api/tags" && method === "POST") {
       const body = init?.body ? JSON.parse(init.body as string) : {};
@@ -101,6 +114,11 @@ function mockApi({
     if (path === "/api/books/b1/tags" && method === "POST") {
       const body = init?.body ? JSON.parse(init.body as string) : {};
       return postBookTag ? postBookTag(body) : { bookTag: { id: "bt1", tag_id: body.tagId } };
+    }
+    if (path.startsWith("/api/books/b1/tags/") && method === "DELETE") return delTag ? delTag() : { ok: true };
+    if (path === "/api/books/b1" && method === "PATCH") {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      return patchBook ? patchBook(body) : { book: { ...book, ...body } };
     }
     if (path === "/api/books/b1" && method === "DELETE") return del ? del() : { ok: true };
     throw new Error(`unexpected call: ${method} ${path}`);
@@ -191,6 +209,78 @@ describe("BookDetail", () => {
       )
     );
     expect(await screen.findByText("sci-fi")).toBeInTheDocument();
+  });
+
+  it("removing an added tag calls DELETE /api/books/:id/tags/:tagId", async () => {
+    mockApi();
+    renderBookDetail();
+    await screen.findByText("Dune");
+
+    await userEvent.type(screen.getByLabelText("Or new tag"), "sci-fi");
+    await userEvent.click(screen.getByRole("button", { name: "Add tag" }));
+    expect(await screen.findByText("sci-fi")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Remove tag sci-fi" }));
+
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        "/api/books/b1/tags/t1",
+        expect.objectContaining({ method: "DELETE" })
+      )
+    );
+    expect(toast).toHaveBeenCalledWith('Removed tag "sci-fi"');
+  });
+
+  it("move-shelf action calls PATCH /api/books/:id with the selected shelf_id", async () => {
+    mockApi();
+    renderBookDetail();
+    await screen.findByText("Dune");
+
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    await userEvent.click(await screen.findByText("Move shelf"));
+
+    await userEvent.click(await screen.findByRole("combobox", { name: "Shelf" }));
+    await userEvent.click(await screen.findByRole("option", { name: /Top Shelf/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        "/api/books/b1",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ shelf_id: "s1" }),
+        })
+      )
+    );
+    expect(toast).toHaveBeenCalledWith("Shelf updated");
+  });
+
+  it("edit-details action calls PATCH /api/books/:id with the edited fields", async () => {
+    mockApi();
+    renderBookDetail();
+    await screen.findByText("Dune");
+
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    await userEvent.click(await screen.findByText("Edit details"));
+
+    await userEvent.type(await screen.findByLabelText("Notes"), "Great condition");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        "/api/books/b1",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({
+            ownership: "owned",
+            notes: "Great condition",
+            do_not_lend: false,
+            wishlist_priority: null,
+          }),
+        })
+      )
+    );
+    expect(toast).toHaveBeenCalledWith("Book updated");
   });
 
   it("delete action calls DELETE and navigates to /library", async () => {
