@@ -66,6 +66,7 @@ function mockApi({
   patchLoan,
   postLoan,
   postContact,
+  patchContact,
 }: {
   loans?: (typeof activeLoan)[];
   contacts?: { id: string; name: string; phone: string | null; email: string | null }[];
@@ -73,6 +74,7 @@ function mockApi({
   patchLoan?: (body: Record<string, unknown>) => unknown;
   postLoan?: (body: Record<string, unknown>) => unknown;
   postContact?: (body: Record<string, unknown>) => unknown;
+  patchContact?: (body: Record<string, unknown>) => unknown;
 } = {}) {
   vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
@@ -92,6 +94,12 @@ function mockApi({
       return postContact
         ? postContact(body)
         : { contact: { id: "c2", name: body.name, phone: body.phone ?? null, email: body.email ?? null } };
+    }
+    if (path.startsWith("/api/contacts/") && method === "PATCH") {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      return patchContact
+        ? patchContact(body)
+        : { contact: { ...contacts[0], ...body } };
     }
     throw new Error(`unexpected call: ${method} ${path}`);
   });
@@ -166,7 +174,7 @@ describe("Loans", () => {
     renderLoans();
     await screen.findByText("Dune");
 
-    await userEvent.click(screen.getByRole("button", { name: "New contact" }));
+    await userEvent.click(screen.getByRole("button", { name: "Contacts" }));
     await userEvent.type(await screen.findByLabelText("Name"), "Bob");
     await userEvent.click(screen.getByRole("button", { name: "Add contact" }));
 
@@ -180,6 +188,51 @@ describe("Loans", () => {
       )
     );
     expect(toast).toHaveBeenCalledWith('Added contact "Bob"');
+  });
+
+  it("editing an existing contact calls PATCH /api/contacts/:id with the updated fields", async () => {
+    mockApi();
+    renderLoans();
+    await screen.findByText("Dune");
+
+    await userEvent.click(screen.getByRole("button", { name: "Contacts" }));
+    // Clicking an existing contact in the list pre-fills the same form for
+    // editing rather than opening a second dialog.
+    await userEvent.click(await screen.findByRole("button", { name: "Alice" }));
+    expect(screen.getByLabelText("Name")).toHaveValue("Alice");
+
+    const nameInput = screen.getByLabelText("Name");
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "Alice Cooper");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        "/api/contacts/c1",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ name: "Alice Cooper", phone: null, email: null }),
+        })
+      )
+    );
+    expect(toast).toHaveBeenCalledWith('Updated contact "Alice Cooper"');
+  });
+
+  it("shows an inline notice in the Add loan dialog when the book/contact pickers fail to load", async () => {
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path.startsWith("/api/loans")) return { loans: [activeLoan] };
+      if (path.startsWith("/api/contacts")) throw new Error("contacts down");
+      if (path.startsWith("/api/books")) return { books: [] };
+      throw new Error("unexpected");
+    });
+    renderLoans();
+    await screen.findByText("Dune");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add loan" }));
+
+    expect(
+      await screen.findByText(/Couldn't load contacts, so the contact picker may be empty/)
+    ).toBeInTheDocument();
   });
 
   it("recording a loan calls POST /api/loans", async () => {

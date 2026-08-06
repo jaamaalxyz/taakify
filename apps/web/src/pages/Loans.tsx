@@ -124,9 +124,18 @@ export function Loans() {
 
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [books, setBooks] = useState<SimpleBook[]>([]);
+  // Surfaced inline in the "Add loan" dialog (not a blocking Alert) — a
+  // failure here just means the book/contact pickers render empty, which
+  // is otherwise unexplained to the user.
+  const [contactsLoadError, setContactsLoadError] = useState("");
+  const [booksLoadError, setBooksLoadError] = useState("");
 
-  // New contact dialog
+  // Contacts dialog — doubles as create and edit, matching the brief's
+  // "create/edit contact" requirement with one reused form: editingContactId
+  // is null for "new contact" and set to an existing contact's id when the
+  // user picks one from the list below the form to edit it.
   const [contactOpen, setContactOpen] = useState(false);
+  const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [contactName, setContactName] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const [contactEmail, setContactEmail] = useState("");
@@ -143,6 +152,14 @@ export function Loans() {
   const [savingLoan, setSavingLoan] = useState(false);
   const [lendError, setLendError] = useState("");
 
+  // Deliberate deviation from the GET /api/loans?active=true contract: we
+  // fetch the full unfiltered loan list once and derive both the Active and
+  // History sections from it client-side (see activeLoans/historyLoans
+  // below), rather than issuing two separate requests (one with
+  // active=true, one without). This keeps "mark returned" and "record a
+  // loan" each need only one refetch to keep both sections in sync, at the
+  // cost of fetching slightly more data up front than active=true alone
+  // would. For a household's loan history size this is a non-issue.
   function loadLoans() {
     setLoadError("");
     const params = new URLSearchParams({ householdId: household.id });
@@ -152,15 +169,23 @@ export function Loans() {
   }
 
   function loadContacts() {
+    setContactsLoadError("");
     api<{ contacts: Contact[] }>(`/api/contacts?householdId=${household.id}`)
       .then((data) => setContacts(data.contacts))
-      .catch(() => setContacts([]));
+      .catch((e) => {
+        setContacts([]);
+        setContactsLoadError((e as Error).message);
+      });
   }
 
   function loadBooks() {
+    setBooksLoadError("");
     api<{ books: SimpleBook[] }>(`/api/books?householdId=${household.id}`)
       .then((data) => setBooks(data.books))
-      .catch(() => setBooks([]));
+      .catch((e) => {
+        setBooks([]);
+        setBooksLoadError((e as Error).message);
+      });
   }
 
   useEffect(() => {
@@ -187,26 +212,52 @@ export function Loans() {
     }
   }
 
-  async function handleCreateContact(e: FormEvent) {
+  function resetContactForm() {
+    setEditingContactId(null);
+    setContactName("");
+    setContactPhone("");
+    setContactEmail("");
+  }
+
+  function startEditContact(contact: Contact) {
+    setEditingContactId(contact.id);
+    setContactName(contact.name);
+    setContactPhone(contact.phone ?? "");
+    setContactEmail(contact.email ?? "");
+    setContactError("");
+  }
+
+  async function handleSaveContact(e: FormEvent) {
     e.preventDefault();
     if (!contactName.trim()) return;
     setContactError("");
     setSavingContact(true);
     try {
-      const data = await api<{ contact: Contact }>("/api/contacts", {
-        method: "POST",
-        body: JSON.stringify({
-          householdId: household.id,
-          name: contactName.trim(),
-          phone: contactPhone.trim() || undefined,
-          email: contactEmail.trim() || undefined,
-        }),
-      });
-      setContacts((prev) => [...prev, data.contact]);
-      toast(`Added contact "${data.contact.name}"`);
-      setContactName("");
-      setContactPhone("");
-      setContactEmail("");
+      if (editingContactId) {
+        const data = await api<{ contact: Contact }>(`/api/contacts/${editingContactId}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            name: contactName.trim(),
+            phone: contactPhone.trim() || null,
+            email: contactEmail.trim() || null,
+          }),
+        });
+        setContacts((prev) => prev.map((c) => (c.id === data.contact.id ? data.contact : c)));
+        toast(`Updated contact "${data.contact.name}"`);
+      } else {
+        const data = await api<{ contact: Contact }>("/api/contacts", {
+          method: "POST",
+          body: JSON.stringify({
+            householdId: household.id,
+            name: contactName.trim(),
+            phone: contactPhone.trim() || undefined,
+            email: contactEmail.trim() || undefined,
+          }),
+        });
+        setContacts((prev) => [...prev, data.contact]);
+        toast(`Added contact "${data.contact.name}"`);
+      }
+      resetContactForm();
       setContactOpen(false);
     } catch (err) {
       setContactError((err as Error).message);
@@ -262,17 +313,57 @@ export function Loans() {
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-lg font-semibold">Loans</h1>
         <div className="flex gap-2">
-          <Dialog open={contactOpen} onOpenChange={setContactOpen}>
+          <Dialog
+            open={contactOpen}
+            onOpenChange={(open) => {
+              setContactOpen(open);
+              if (!open) {
+                resetContactForm();
+                setContactError("");
+              }
+            }}
+          >
             <DialogTrigger asChild>
               <Button size="sm" variant="outline">
-                New contact
+                Contacts
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>New contact</DialogTitle>
+                <DialogTitle>Contacts</DialogTitle>
               </DialogHeader>
-              <form onSubmit={handleCreateContact} className="space-y-3">
+
+              {contacts.length > 0 && (
+                <ul className="max-h-32 space-y-1 overflow-y-auto rounded-md border p-2">
+                  {contacts.map((c) => (
+                    <li key={c.id}>
+                      <button
+                        type="button"
+                        onClick={() => startEditContact(c)}
+                        className="w-full rounded px-2 py-1 text-left text-sm hover:bg-accent"
+                      >
+                        {c.name}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <form onSubmit={handleSaveContact} className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium text-muted-foreground">
+                    {editingContactId ? "Edit contact" : "New contact"}
+                  </p>
+                  {editingContactId && (
+                    <button
+                      type="button"
+                      onClick={resetContactForm}
+                      className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+                    >
+                      + New contact instead
+                    </button>
+                  )}
+                </div>
                 <div className="space-y-1">
                   <Label htmlFor="contact-name">Name</Label>
                   <Input
@@ -297,7 +388,7 @@ export function Loans() {
                 )}
                 <DialogFooter>
                   <Button type="submit" disabled={savingContact}>
-                    {savingContact ? "Saving…" : "Add contact"}
+                    {savingContact ? "Saving…" : editingContactId ? "Save changes" : "Add contact"}
                   </Button>
                 </DialogFooter>
               </form>
@@ -313,6 +404,15 @@ export function Loans() {
                 <DialogTitle>Record a loan</DialogTitle>
               </DialogHeader>
               <form onSubmit={handleCreateLoan} className="space-y-3">
+                {(booksLoadError || contactsLoadError) && (
+                  <p className="text-xs text-muted-foreground">
+                    {booksLoadError && contactsLoadError
+                      ? "Couldn't load books or contacts, so those pickers may be empty — try reopening this dialog."
+                      : booksLoadError
+                        ? "Couldn't load books, so the book picker may be empty — try reopening this dialog."
+                        : "Couldn't load contacts, so the contact picker may be empty — try reopening this dialog."}
+                  </p>
+                )}
                 <div className="space-y-1">
                   <Label htmlFor="lend-book">Book</Label>
                   <Select value={lendBookId} onValueChange={setLendBookId}>
