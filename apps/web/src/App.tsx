@@ -5,6 +5,7 @@ import { SignIn } from "./pages/SignIn.js";
 import { Onboarding } from "./pages/Onboarding.js";
 import { InviteAccept } from "./pages/InviteAccept.js";
 import { Library } from "./pages/Library.js";
+import { Add } from "./pages/Add.js";
 import { Profile } from "./pages/Profile.js";
 import { AppShell } from "./components/AppShell.js";
 import { Skeleton } from "./components/ui/skeleton.js";
@@ -33,12 +34,13 @@ export function App() {
         Authed routes nest under AppShell, which owns fetching /api/me and
         redirecting to /onboarding when the user has no household yet (see
         lib/household-context.tsx). Only routes for pages that exist land
-        here — /library and /profile. /library/:bookId, /add, /bookcases,
-        and /loans are added by Tasks 8-11 as their pages are built.
+        here — /library, /add, and /profile. /library/:bookId, /bookcases,
+        and /loans are added by Tasks 10-11 as their pages are built.
       */}
       <Route element={authed ? <AppShell /> : <Navigate to="/signin" />}>
         <Route path="/" element={<Navigate to="/library" />} />
         <Route path="/library" element={<Library />} />
+        <Route path="/add" element={<Add />} />
         <Route path="/profile" element={<Profile />} />
       </Route>
     </Routes>
