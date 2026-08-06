@@ -49,15 +49,15 @@ describe("App routing", () => {
 
   it("redirects authenticated users away from /signin, to /library within the AppShell", async () => {
     vi.mocked(authClient.useSession).mockReturnValue({ data: { user: {} }, isPending: false } as never);
-    vi.mocked(api).mockResolvedValueOnce(me);
+    vi.mocked(api).mockResolvedValueOnce(me).mockResolvedValueOnce({ books: [] });
     renderApp("/signin");
     expect(await screen.findByRole("heading", { name: "Library" })).toBeInTheDocument();
     expect(screen.getByText("Family Library")).toBeInTheDocument();
   });
 
-  it("renders the Library stub under AppShell when authed with a household", async () => {
+  it("renders the Library page under AppShell when authed with a household", async () => {
     vi.mocked(authClient.useSession).mockReturnValue({ data: { user: {} }, isPending: false } as never);
-    vi.mocked(api).mockResolvedValueOnce(me);
+    vi.mocked(api).mockResolvedValueOnce(me).mockResolvedValueOnce({ books: [] });
     renderApp("/library");
     expect(await screen.findByRole("heading", { name: "Library" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Library/ })).toBeInTheDocument();
