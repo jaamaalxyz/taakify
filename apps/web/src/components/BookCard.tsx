@@ -8,7 +8,7 @@ export type LibraryBook = {
   format: string | null;
   shelf_id: string | null;
   do_not_lend: boolean;
-  wishlist_priority: number | null;
+  wishlist_priority: "high" | "medium" | "low" | null;
   notes: string | null;
   edition: {
     id: string;

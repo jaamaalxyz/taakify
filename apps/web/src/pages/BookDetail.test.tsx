@@ -80,6 +80,7 @@ function mockApi({
   statusList = statuses,
   putStatus,
   tags = [],
+  bookTags: initialBookTags = [],
   postTag,
   postBookTag,
   del,
@@ -90,6 +91,7 @@ function mockApi({
   statusList?: typeof statuses;
   putStatus?: (body: Record<string, unknown>) => unknown;
   tags?: { id: string; name: string; updated_at: string }[];
+  bookTags?: { id: string; name: string; updated_at: string }[];
   postTag?: (body: Record<string, unknown>) => unknown;
   postBookTag?: (body: Record<string, unknown>) => unknown;
   del?: () => unknown;
@@ -97,6 +99,13 @@ function mockApi({
   bookcases?: (typeof bookcase)[];
   patchBook?: (body: Record<string, unknown>) => unknown;
 } = {}) {
+  // Tracks tag id -> tag across both /api/tags (household tags) and any
+  // freshly created tags, so /api/books/b1/tags can echo back real names
+  // after a POST — mirrors the real server's book_tag/tag join.
+  const tagsById = new Map(tags.map((t) => [t.id, t]));
+  let currentBookTags = [...initialBookTags];
+  for (const t of initialBookTags) tagsById.set(t.id, t);
+
   vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     if (path === "/api/books/b1" && method === "GET") return { book };
@@ -106,16 +115,28 @@ function mockApi({
       return putStatus ? putStatus(body) : { status: { ...statuses[0], ...body } };
     }
     if (path.startsWith("/api/bookcases")) return { bookcases };
+    if (path === "/api/books/b1/tags" && method === "GET") return { tags: currentBookTags };
     if (path.startsWith("/api/tags") && method === "GET") return { tags };
     if (path === "/api/tags" && method === "POST") {
       const body = init?.body ? JSON.parse(init.body as string) : {};
-      return postTag ? postTag(body) : { tag: { id: "t1", name: body.name, updated_at: "2026-01-01T00:00:00Z" } };
+      const result = (
+        postTag ? postTag(body) : { tag: { id: "t1", name: body.name, updated_at: "2026-01-01T00:00:00Z" } }
+      ) as { tag: { id: string; name: string; updated_at: string } };
+      tagsById.set(result.tag.id, result.tag);
+      return result;
     }
     if (path === "/api/books/b1/tags" && method === "POST") {
       const body = init?.body ? JSON.parse(init.body as string) : {};
-      return postBookTag ? postBookTag(body) : { bookTag: { id: "bt1", tag_id: body.tagId } };
+      const result = postBookTag ? postBookTag(body) : { bookTag: { id: "bt1", tag_id: body.tagId } };
+      const tag = tagsById.get(body.tagId);
+      if (tag && !currentBookTags.some((t) => t.id === tag.id)) currentBookTags = [...currentBookTags, tag];
+      return result;
     }
-    if (path.startsWith("/api/books/b1/tags/") && method === "DELETE") return delTag ? delTag() : { ok: true };
+    if (path.startsWith("/api/books/b1/tags/") && method === "DELETE") {
+      const tagId = path.split("/").pop();
+      currentBookTags = currentBookTags.filter((t) => t.id !== tagId);
+      return delTag ? delTag() : { ok: true };
+    }
     if (path === "/api/books/b1" && method === "PATCH") {
       const body = init?.body ? JSON.parse(init.body as string) : {};
       return patchBook ? patchBook(body) : { book: { ...book, ...body } };
@@ -180,6 +201,22 @@ describe("BookDetail", () => {
       )
     );
     expect(toast).toHaveBeenCalledWith("Status updated");
+  });
+
+  it("loads tags already on the book from GET /api/books/:id/tags (persists across reload)", async () => {
+    mockApi({ bookTags: [{ id: "t9", name: "classic", updated_at: "2026-01-01T00:00:00Z" }] });
+    renderBookDetail();
+    await screen.findByText("Dune");
+
+    expect(await screen.findByText("classic")).toBeInTheDocument();
+  });
+
+  it("shows an empty-tags message when the book has no tags yet", async () => {
+    mockApi();
+    renderBookDetail();
+    await screen.findByText("Dune");
+
+    expect(await screen.findByText("No tags on this book yet.")).toBeInTheDocument();
   });
 
   it("adding a tag calls POST /api/tags then POST /api/books/:id/tags", async () => {

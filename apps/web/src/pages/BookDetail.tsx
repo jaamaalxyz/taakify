@@ -100,15 +100,13 @@ export function BookDetail() {
   const [savingStatus, setSavingStatus] = useState(false);
   const [statusError, setStatusError] = useState("");
 
-  // Tags. There's no "list tags attached to this book" endpoint (checked
-  // routes/books.ts and routes/tags.ts) — GET /api/tags only returns all
-  // household tags, not which are on this book, and POST
-  // /api/books/:bookId/tags doesn't return an updated book with a tags
-  // array either. As a workaround we track "tags added this session" in
-  // local state; this is a known gap, not true server state, and won't
-  // reflect tags added in a previous visit or by another member.
+  // Tags. bookTags is the server-side source of truth for what's currently
+  // on this book (GET /api/books/:bookId/tags), refetched after every
+  // add/remove so it stays accurate across page reloads and other members'
+  // changes — unlike the old "tags added this session" local-state
+  // workaround this replaced.
   const [householdTags, setHouseholdTags] = useState<Tag[]>([]);
-  const [addedTags, setAddedTags] = useState<Tag[]>([]);
+  const [bookTags, setBookTags] = useState<Tag[] | null>(null);
   const [selectedTagId, setSelectedTagId] = useState<string>("");
   const [newTagName, setNewTagName] = useState("");
   const [tagError, setTagError] = useState("");
@@ -166,9 +164,17 @@ export function BookDetail() {
       .catch((e) => setLoadError((e as Error).message));
   }
 
+  function loadBookTags() {
+    if (!bookId) return;
+    api<{ tags: Tag[] }>(`/api/books/${bookId}/tags`)
+      .then((data) => setBookTags(data.tags))
+      .catch((e) => setTagError((e as Error).message));
+  }
+
   useEffect(() => {
     loadBook();
     loadStatuses();
+    loadBookTags();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId]);
 
@@ -244,7 +250,7 @@ export function BookDetail() {
         method: "POST",
         body: JSON.stringify({ tagId }),
       });
-      setAddedTags((prev) => (prev.some((t) => t.id === tag.id) ? prev : [...prev, tag]));
+      loadBookTags();
       toast(`Added tag "${tag.name}"`);
       setSelectedTagId("");
       setNewTagName("");
@@ -259,7 +265,7 @@ export function BookDetail() {
     if (!bookId) return;
     try {
       await api(`/api/books/${bookId}/tags/${tag.id}`, { method: "DELETE" });
-      setAddedTags((prev) => prev.filter((t) => t.id !== tag.id));
+      loadBookTags();
       toast(`Removed tag "${tag.name}"`);
     } catch (err) {
       setTagError((err as Error).message);
@@ -457,17 +463,10 @@ export function BookDetail() {
 
       <section className="space-y-3">
         <h2 className="text-sm font-semibold">Tags</h2>
-        {/*
-          Known gap: there's no API to fetch which tags are currently
-          attached to this book (GET /api/tags only lists all household
-          tags; POST /api/books/:bookId/tags doesn't echo an updated tags
-          list either). We only render tags added during this session
-          (addedTags), each removable — a page reload loses this view even
-          though the server-side book_tag rows persist.
-        */}
-        {addedTags.length > 0 && (
+        {bookTags === null && <Skeleton className="h-6 w-32" />}
+        {bookTags !== null && bookTags.length > 0 && (
           <div className="flex flex-wrap gap-2">
-            {addedTags.map((tag) => (
+            {bookTags.map((tag) => (
               <Badge key={tag.id} variant="secondary" className="gap-1">
                 {tag.name}
                 <button
@@ -482,10 +481,8 @@ export function BookDetail() {
             ))}
           </div>
         )}
-        {addedTags.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            No tags added this session (existing tags on this book, if any, aren't shown here — see note in code).
-          </p>
+        {bookTags !== null && bookTags.length === 0 && (
+          <p className="text-sm text-muted-foreground">No tags on this book yet.</p>
         )}
         <div className="flex flex-wrap items-end gap-2">
           <div className="space-y-1">

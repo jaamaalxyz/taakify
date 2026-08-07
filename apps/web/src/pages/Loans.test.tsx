@@ -148,6 +148,36 @@ describe("Loans", () => {
     expect(toast).toHaveBeenCalledWith("Marked as returned");
   });
 
+  it("marking a loan returned builds the date from local Date components, not toISOString()", async () => {
+    // toISOString() renders in UTC, which can be the wrong calendar day in
+    // any non-UTC timezone. Assert the implementation never calls it, and
+    // that the payload matches a date built the same way dateStr() does
+    // server-side (local getFullYear/getMonth/getDate), not a UTC slice.
+    const isoSpy = vi.spyOn(Date.prototype, "toISOString");
+    mockApi();
+    renderLoans();
+    await screen.findByText("Dune");
+
+    await userEvent.click(screen.getByRole("button", { name: "Mark returned" }));
+
+    const now = new Date();
+    const expected = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+      now.getDate()
+    ).padStart(2, "0")}`;
+
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        "/api/loans/l1",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ returned_date: expected }),
+        })
+      )
+    );
+    expect(isoSpy).not.toHaveBeenCalled();
+    isoSpy.mockRestore();
+  });
+
   it("shows returned loans in history, not active", async () => {
     mockApi({ loans: [returnedLoan] });
     renderLoans();

@@ -49,7 +49,11 @@ describe("App routing", () => {
 
   it("redirects authenticated users away from /signin, to /library within the AppShell", async () => {
     vi.mocked(authClient.useSession).mockReturnValue({ data: { user: {} }, isPending: false } as never);
-    vi.mocked(api).mockResolvedValueOnce(me).mockResolvedValueOnce({ books: [] });
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path === "/api/me") return me;
+      if (path.startsWith("/api/tags")) return { tags: [] };
+      return { books: [] };
+    });
     renderApp("/signin");
     expect(await screen.findByRole("heading", { name: "Library" })).toBeInTheDocument();
     expect(screen.getByText("Family Library")).toBeInTheDocument();
@@ -57,7 +61,11 @@ describe("App routing", () => {
 
   it("renders the Library page under AppShell when authed with a household", async () => {
     vi.mocked(authClient.useSession).mockReturnValue({ data: { user: {} }, isPending: false } as never);
-    vi.mocked(api).mockResolvedValueOnce(me).mockResolvedValueOnce({ books: [] });
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path === "/api/me") return me;
+      if (path.startsWith("/api/tags")) return { tags: [] };
+      return { books: [] };
+    });
     renderApp("/library");
     expect(await screen.findByRole("heading", { name: "Library" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Library/ })).toBeInTheDocument();

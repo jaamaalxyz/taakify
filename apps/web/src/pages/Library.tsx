@@ -6,11 +6,21 @@ import { api } from "../lib/api.js";
 import { BookCard, type LibraryBook } from "../components/BookCard.js";
 import { Input } from "../components/ui/input.js";
 import { Badge } from "../components/ui/badge.js";
+import { Button } from "../components/ui/button.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Card, CardContent } from "../components/ui/card.js";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select.js";
 
 type Ownership = "owned" | "borrowed_in" | "wishlist";
+type ReadingStatusValue = "unread" | "want_to_read" | "reading" | "finished" | "abandoned";
+type Tag = { id: string; name: string; updated_at: string };
 
 const OWNERSHIP_FILTERS: { label: string; value: Ownership | "" }[] = [
   { label: "All", value: "" },
@@ -19,13 +29,36 @@ const OWNERSHIP_FILTERS: { label: string; value: Ownership | "" }[] = [
   { label: "Wishlist", value: "wishlist" },
 ];
 
+// Fixed enum matching reading-status.ts's VALID_STATUSES — no fetch needed.
+const STATUS_FILTERS: { label: string; value: ReadingStatusValue }[] = [
+  { label: "Unread", value: "unread" },
+  { label: "Want to read", value: "want_to_read" },
+  { label: "Reading", value: "reading" },
+  { label: "Finished", value: "finished" },
+  { label: "Abandoned", value: "abandoned" },
+];
+
+// Radix Select doesn't allow an empty-string item value, so "cleared" state
+// is represented with sentinels and mapped to "no query param" at fetch time.
+const ALL_STATUSES = "all";
+const ALL_TAGS = "all";
+
+// Matches the API's default LIMIT (books.ts) — used both as the page size we
+// request and as the heuristic for whether a "Load more" page might exist.
+const PAGE_SIZE = 100;
+
 export function Library() {
   const { household } = useHousehold();
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [ownership, setOwnership] = useState<Ownership | "">("");
+  const [statusFilter, setStatusFilter] = useState<string>(ALL_STATUSES);
+  const [tagFilter, setTagFilter] = useState<string>(ALL_TAGS);
+  const [tags, setTags] = useState<Tag[]>([]);
   const [books, setBooks] = useState<LibraryBook[] | null>(null);
   const [loadError, setLoadError] = useState("");
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   // Debounce the search box: wait 250ms after the user stops typing before
   // updating debouncedSearch, which is what actually drives the fetch below.
@@ -35,16 +68,34 @@ export function Library() {
   }, [search]);
 
   useEffect(() => {
-    setBooks(null);
-    setLoadError("");
+    api<{ tags: Tag[] }>(`/api/tags?householdId=${household.id}`)
+      .then((data) => setTags(data.tags))
+      .catch(() => setTags([]));
+  }, [household.id]);
+
+  function buildParams(offset: number) {
     const params = new URLSearchParams({ householdId: household.id });
     if (debouncedSearch) params.set("q", debouncedSearch);
     if (ownership) params.set("ownership", ownership);
+    if (statusFilter !== ALL_STATUSES) params.set("status", statusFilter);
+    if (tagFilter !== ALL_TAGS) params.set("tag", tagFilter);
+    // Omitted on the first page so the request is unchanged from before
+    // pagination existed; only "Load more" sends an explicit offset.
+    if (offset > 0) params.set("offset", String(offset));
+    return params;
+  }
+
+  useEffect(() => {
+    setBooks(null);
+    setLoadError("");
+    setHasMore(false);
 
     let cancelled = false;
-    api<{ books: LibraryBook[] }>(`/api/books?${params.toString()}`)
+    api<{ books: LibraryBook[] }>(`/api/books?${buildParams(0).toString()}`)
       .then((data) => {
-        if (!cancelled) setBooks(data.books);
+        if (cancelled) return;
+        setBooks(data.books);
+        setHasMore(data.books.length === PAGE_SIZE);
       })
       .catch((e) => {
         if (!cancelled) setLoadError((e as Error).message);
@@ -52,7 +103,20 @@ export function Library() {
     return () => {
       cancelled = true;
     };
-  }, [household.id, debouncedSearch, ownership]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [household.id, debouncedSearch, ownership, statusFilter, tagFilter]);
+
+  function handleLoadMore() {
+    if (!books) return;
+    setLoadingMore(true);
+    api<{ books: LibraryBook[] }>(`/api/books?${buildParams(books.length).toString()}`)
+      .then((data) => {
+        setBooks((prev) => [...(prev ?? []), ...data.books]);
+        setHasMore(data.books.length === PAGE_SIZE);
+      })
+      .catch((e) => setLoadError((e as Error).message))
+      .finally(() => setLoadingMore(false));
+  }
 
   return (
     <div className="space-y-4">
@@ -84,6 +148,36 @@ export function Library() {
         ))}
       </div>
 
+      <div className="flex flex-wrap gap-2">
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="w-40" aria-label="Status">
+            <SelectValue placeholder="All statuses" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_STATUSES}>All statuses</SelectItem>
+            {STATUS_FILTERS.map((s) => (
+              <SelectItem key={s.value} value={s.value}>
+                {s.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select value={tagFilter} onValueChange={setTagFilter}>
+          <SelectTrigger className="w-40" aria-label="Tag">
+            <SelectValue placeholder="All tags" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_TAGS}>All tags</SelectItem>
+            {tags.map((tag) => (
+              <SelectItem key={tag.id} value={tag.name}>
+                {tag.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
       {loadError && (
         <Alert variant="destructive">
           <AlertDescription>Couldn't load your books: {loadError}</AlertDescription>
@@ -111,11 +205,20 @@ export function Library() {
       )}
 
       {!loadError && books !== null && books.length > 0 && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {books.map((book) => (
-            <BookCard key={book.id} book={book} />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {books.map((book) => (
+              <BookCard key={book.id} book={book} />
+            ))}
+          </div>
+          {hasMore && (
+            <div className="flex justify-center">
+              <Button variant="outline" onClick={handleLoadMore} disabled={loadingMore}>
+                {loadingMore ? "Loading…" : "Load more"}
+              </Button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
