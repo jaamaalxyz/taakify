@@ -139,20 +139,26 @@ loans.patch("/:id", async (c) => {
   }
   if (!sets.length) return c.json({ error: "nothing to update" }, 400);
 
-  const { rows } = await withUser(user.id, (client) =>
-    client.query(
+  // Single transaction for the UPDATE and the re-select: a second, separate
+  // withUser call for the re-select would open a race window where a
+  // concurrent soft-delete between the two calls causes a spurious 404
+  // after a successful write.
+  const loanRow = await withUser(user.id, async (client) => {
+    const { rows } = await client.query(
       `UPDATE loan SET ${sets.join(", ")}, updated_at = now()
        WHERE id = $1 AND deleted_at IS NULL RETURNING id`,
       params
-    )
-  );
-  if (!rows[0]) return c.json({ error: "not found" }, 404);
+    );
+    if (!rows[0]) return null;
 
-  const { rows: loanRows } = await withUser(user.id, (client) =>
-    client.query(NESTED_SELECT + " WHERE l.id = $1 AND l.deleted_at IS NULL", [c.req.param("id")])
-  );
-  if (!loanRows[0]) return c.json({ error: "not found" }, 404);
-  return c.json({ loan: nestLoan(loanRows[0]) });
+    const { rows: loanRows } = await client.query(
+      NESTED_SELECT + " WHERE l.id = $1 AND l.deleted_at IS NULL",
+      [c.req.param("id")]
+    );
+    return loanRows[0] ?? null;
+  });
+  if (!loanRow) return c.json({ error: "not found" }, 404);
+  return c.json({ loan: nestLoan(loanRow) });
 });
 
 // GET /api/loans?householdId=&active=&contactId=

@@ -6,7 +6,10 @@ export const tags = new Hono<{ Variables: { user: SessionUser } }>();
 export const bookTags = new Hono<{ Variables: { user: SessionUser } }>();
 
 tags.use("*", requireUser);
-bookTags.use("*", requireUser);
+// bookTags is mounted at /api/books in app.ts alongside books.ts and
+// reading-status.ts, all under the same prefix — requireUser is applied
+// once there (app.use("/api/books/*", requireUser)) rather than per
+// sub-app, to avoid running the session lookup 2-3x per request.
 
 // GET /api/tags?householdId=...
 tags.get("/", async (c) => {
@@ -61,6 +64,32 @@ tags.post("/", async (c) => {
     return c.json({ tag: existing }, 200);
   }
   return c.json({ tag: insertResult }, 201);
+});
+
+// GET /api/books/:bookId/tags — tags currently attached to a book.
+bookTags.get("/:bookId/tags", async (c) => {
+  const user = c.get("user");
+  const bookId = c.req.param("bookId");
+
+  const result = await withUser(user.id, async (client) => {
+    const { rows: bookRows } = await client.query(
+      "SELECT id FROM book WHERE id = $1 AND deleted_at IS NULL",
+      [bookId]
+    );
+    if (!bookRows[0]) return null;
+
+    const { rows } = await client.query(
+      `SELECT t.id, t.name, t.updated_at
+       FROM book_tag bt JOIN tag t ON t.id = bt.tag_id
+       WHERE bt.book_id = $1 AND bt.deleted_at IS NULL AND t.deleted_at IS NULL
+       ORDER BY t.name`,
+      [bookId]
+    );
+    return rows;
+  });
+
+  if (!result) return c.json({ error: "not found" }, 404);
+  return c.json({ tags: result });
 });
 
 // POST /api/books/:bookId/tags — body {tagId}

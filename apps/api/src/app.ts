@@ -37,6 +37,13 @@ app.get("/api/me", requireUser, async (c) => {
 app.route("/api/households", households);
 app.route("/api/households/:householdId/invites", householdInvites);
 app.route("/api/invites", invites);
+
+// books.ts, reading-status.ts, and tags.ts's bookTags are all mounted on the
+// overlapping "/api/books" prefix below — requireUser is applied once here
+// instead of via a "*" middleware in each of those three sub-apps, which
+// would otherwise run the session lookup (a DB round-trip) 2-3x per request.
+app.use("/api/books", requireUser);
+app.use("/api/books/*", requireUser);
 app.route("/api/books", books);
 app.route("/api/editions", editions);
 app.route("/api/bookcases", bookcases);

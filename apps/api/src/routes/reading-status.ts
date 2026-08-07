@@ -1,12 +1,14 @@
 import { Hono } from "hono";
 import { withUser } from "../db/tenant.js";
-import { requireUser, type SessionUser } from "../middleware/session.js";
+import { type SessionUser } from "../middleware/session.js";
 import { dateStr } from "../lib/date.js";
 
 export const readingStatus = new Hono<{ Variables: { user: SessionUser } }>();
 
-readingStatus.use("*", requireUser);
-
+// requireUser is applied once, in app.ts, on the shared "/api/books/*"
+// prefix — this sub-app is mounted there alongside books.ts and tags.ts's
+// bookTags, so a per-sub-app "*" middleware here would run redundantly on
+// every request to any /api/books/* path.
 const VALID_STATUSES = ["unread", "want_to_read", "reading", "finished", "abandoned"];
 
 // PUT /api/books/:bookId/status — upserts the caller's own status row.
