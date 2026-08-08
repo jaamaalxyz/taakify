@@ -4,6 +4,7 @@ import { Copy } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
 import { api } from "../lib/api.js";
+import { priorityRank, WISHLIST_PRIORITY_LABELS, type Ownership, type WishlistPriority } from "../lib/labels.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Badge } from "../components/ui/badge.js";
@@ -20,20 +21,12 @@ import {
   DialogTrigger,
 } from "../components/ui/dialog.js";
 
-type Ownership = "owned" | "borrowed_in" | "wishlist";
-type WishlistPriority = "high" | "medium" | "low" | null;
-
 type Book = {
   id: string;
   ownership: Ownership;
-  wishlist_priority: WishlistPriority;
+  wishlist_priority: WishlistPriority | null;
   edition: { id: string; title: string; authors: string };
 };
-
-const PRIORITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
-function priorityRank(p: WishlistPriority): number {
-  return p ? (PRIORITY_ORDER[p] ?? 3) : 3;
-}
 
 export function Profile() {
   const { user, household } = useHousehold();
@@ -155,7 +148,9 @@ export function Profile() {
                     <p className="truncate text-sm font-medium">{b.edition.title}</p>
                     <p className="truncate text-xs text-muted-foreground">{b.edition.authors}</p>
                   </Link>
-                  {b.wishlist_priority && <Badge variant="outline">{b.wishlist_priority}</Badge>}
+                  {b.wishlist_priority && (
+                    <Badge variant="outline">{WISHLIST_PRIORITY_LABELS[b.wishlist_priority]}</Badge>
+                  )}
                 </li>
               ))}
             </ul>

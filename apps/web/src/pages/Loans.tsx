@@ -4,6 +4,7 @@ import { BookOpen, HandCoins } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
 import { api } from "../lib/api.js";
+import { LOAN_DIRECTION_LABELS, type LoanDirection as Direction } from "../lib/labels.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Badge } from "../components/ui/badge.js";
@@ -26,8 +27,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "../components/ui/dialog.js";
-
-type Direction = "lent_out" | "borrowed_in";
 
 type LoanBook = {
   id: string;
@@ -63,11 +62,6 @@ type Loan = {
 type Contact = { id: string; name: string; phone: string | null; email: string | null };
 
 type SimpleBook = { id: string; edition: { title: string; authors: string } };
-
-const DIRECTION_LABELS: Record<Direction, string> = {
-  lent_out: "Lent out",
-  borrowed_in: "Borrowed in",
-};
 
 const NEW_CONTACT = "__new__";
 
@@ -108,7 +102,7 @@ function LoanRow({
           {loan.book.edition.title}
         </Link>
         <p className="text-xs text-muted-foreground">
-          {DIRECTION_LABELS[loan.direction]} · {loan.contact.name}
+          {LOAN_DIRECTION_LABELS[loan.direction]} · {loan.contact.name}
           {loan.due_date && ` · due ${loan.due_date}`}
         </p>
         {loan.overdue && <Badge variant="destructive">Overdue</Badge>}

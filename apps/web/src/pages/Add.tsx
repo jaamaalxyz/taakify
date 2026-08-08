@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
 import { api } from "../lib/api.js";
+import { type Ownership } from "../lib/labels.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.js";
 import { Input } from "../components/ui/input.js";
 import { Label } from "../components/ui/label.js";
@@ -17,8 +18,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select.js";
-
-type Ownership = "owned" | "borrowed_in" | "wishlist";
 
 type EditionLookup = {
   isbn: string;
