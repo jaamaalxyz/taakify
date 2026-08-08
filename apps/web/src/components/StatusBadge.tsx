@@ -1,8 +1,6 @@
 import { Badge } from "./ui/badge.js";
 import { READING_STATUS_LABELS, type ReadingStatus } from "../lib/labels.js";
 
-export type { ReadingStatus };
-
 // Variant mapping: "reading" is the active/in-progress state, so it gets the
 // primary (default) variant to stand out. "finished" is a completed, neutral
 // state -> secondary. "unread"/"want_to_read" are passive/not-yet-started

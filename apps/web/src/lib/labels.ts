@@ -8,6 +8,13 @@
 
 export type Ownership = "owned" | "borrowed_in" | "wishlist";
 
+export type LoanDirection = "lent_out" | "borrowed_in";
+
+export const LOAN_DIRECTION_LABELS: Record<LoanDirection, string> = {
+  lent_out: "Lent out",
+  borrowed_in: "Borrowed in",
+};
+
 export const OWNERSHIP_LABELS: Record<Ownership, string> = {
   owned: "Owned",
   borrowed_in: "Borrowed",

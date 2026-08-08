@@ -10,9 +10,10 @@ import {
   READING_STATUS_ORDER,
   WISHLIST_PRIORITY_LABELS,
   type Ownership,
+  type ReadingStatus,
   type WishlistPriority,
 } from "../lib/labels.js";
-import { StatusBadge, type ReadingStatus } from "../components/StatusBadge.js";
+import { StatusBadge } from "../components/StatusBadge.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Badge } from "../components/ui/badge.js";
