@@ -4,6 +4,14 @@ import { BookOpen, MoreVertical } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
 import { api } from "../lib/api.js";
+import {
+  OWNERSHIP_LABELS,
+  READING_STATUS_LABELS,
+  READING_STATUS_ORDER,
+  WISHLIST_PRIORITY_LABELS,
+  type Ownership,
+  type WishlistPriority,
+} from "../lib/labels.js";
 import { StatusBadge, type ReadingStatus } from "../components/StatusBadge.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
@@ -35,9 +43,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.js";
-
-type Ownership = "owned" | "borrowed_in" | "wishlist";
-type WishlistPriority = "high" | "medium" | "low";
 
 type Book = {
   id: string;
@@ -75,7 +80,6 @@ type Bookcase = { id: string; name: string; updated_at: string; shelves: Shelf[]
 type Tag = { id: string; name: string; updated_at: string };
 
 const NO_SHELF = "none";
-const STATUS_OPTIONS: ReadingStatus[] = ["unread", "want_to_read", "reading", "finished", "abandoned"];
 
 export function BookDetail() {
   const { bookId } = useParams<{ bookId: string }>();
@@ -368,7 +372,7 @@ export function BookDetail() {
             {book.edition.language && (
               <p className="text-xs text-muted-foreground">Language: {book.edition.language}</p>
             )}
-            <Badge variant="outline">{book.ownership}</Badge>
+            <Badge variant="outline">{OWNERSHIP_LABELS[book.ownership]}</Badge>
           </div>
         </div>
 
@@ -427,9 +431,9 @@ export function BookDetail() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {STATUS_OPTIONS.map((s) => (
+                {READING_STATUS_ORDER.map((s) => (
                   <SelectItem key={s} value={s}>
-                    {s}
+                    {READING_STATUS_LABELS[s]}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -611,9 +615,11 @@ export function BookDetail() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">None</SelectItem>
-                  <SelectItem value="high">High</SelectItem>
-                  <SelectItem value="medium">Medium</SelectItem>
-                  <SelectItem value="low">Low</SelectItem>
+                  {(["high", "medium", "low"] as const).map((p) => (
+                    <SelectItem key={p} value={p}>
+                      {WISHLIST_PRIORITY_LABELS[p]}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

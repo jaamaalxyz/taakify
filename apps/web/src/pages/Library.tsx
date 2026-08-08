@@ -3,6 +3,13 @@ import { Link } from "react-router-dom";
 import { BookOpen } from "lucide-react";
 import { useHousehold } from "../lib/household-context.js";
 import { api } from "../lib/api.js";
+import {
+  OWNERSHIP_LABELS,
+  READING_STATUS_LABELS,
+  READING_STATUS_ORDER,
+  type Ownership,
+  type ReadingStatus,
+} from "../lib/labels.js";
 import { BookCard, type LibraryBook } from "../components/BookCard.js";
 import { Input } from "../components/ui/input.js";
 import { Badge } from "../components/ui/badge.js";
@@ -18,25 +25,20 @@ import {
   SelectValue,
 } from "../components/ui/select.js";
 
-type Ownership = "owned" | "borrowed_in" | "wishlist";
-type ReadingStatusValue = "unread" | "want_to_read" | "reading" | "finished" | "abandoned";
 type Tag = { id: string; name: string; updated_at: string };
 
+// "All" + one chip per ownership value, labels from the shared map.
 const OWNERSHIP_FILTERS: { label: string; value: Ownership | "" }[] = [
   { label: "All", value: "" },
-  { label: "Owned", value: "owned" },
-  { label: "Borrowed", value: "borrowed_in" },
-  { label: "Wishlist", value: "wishlist" },
+  ...(["owned", "borrowed_in", "wishlist"] as const).map((v) => ({
+    label: OWNERSHIP_LABELS[v],
+    value: v,
+  })),
 ];
 
 // Fixed enum matching reading-status.ts's VALID_STATUSES — no fetch needed.
-const STATUS_FILTERS: { label: string; value: ReadingStatusValue }[] = [
-  { label: "Unread", value: "unread" },
-  { label: "Want to read", value: "want_to_read" },
-  { label: "Reading", value: "reading" },
-  { label: "Finished", value: "finished" },
-  { label: "Abandoned", value: "abandoned" },
-];
+const STATUS_FILTERS: { label: string; value: ReadingStatus }[] =
+  READING_STATUS_ORDER.map((v) => ({ label: READING_STATUS_LABELS[v], value: v }));
 
 // Radix Select doesn't allow an empty-string item value, so "cleared" state
 // is represented with sentinels and mapped to "no query param" at fetch time.

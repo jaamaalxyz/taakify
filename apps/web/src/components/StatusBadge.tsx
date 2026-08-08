@@ -1,14 +1,7 @@
 import { Badge } from "./ui/badge.js";
+import { READING_STATUS_LABELS, type ReadingStatus } from "../lib/labels.js";
 
-export type ReadingStatus = "unread" | "want_to_read" | "reading" | "finished" | "abandoned";
-
-const STATUS_LABELS: Record<ReadingStatus, string> = {
-  unread: "Unread",
-  want_to_read: "Want to Read",
-  reading: "Reading",
-  finished: "Finished",
-  abandoned: "Abandoned",
-};
+export type { ReadingStatus };
 
 // Variant mapping: "reading" is the active/in-progress state, so it gets the
 // primary (default) variant to stand out. "finished" is a completed, neutral
@@ -24,5 +17,5 @@ const STATUS_VARIANTS: Record<ReadingStatus, "default" | "secondary" | "outline"
 
 export function StatusBadge({ status }: { status?: ReadingStatus | null }) {
   if (!status) return null;
-  return <Badge variant={STATUS_VARIANTS[status]}>{STATUS_LABELS[status]}</Badge>;
+  return <Badge variant={STATUS_VARIANTS[status]}>{READING_STATUS_LABELS[status]}</Badge>;
 }

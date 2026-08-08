@@ -1,14 +1,15 @@
 import { Link } from "react-router-dom";
 import { BookOpen } from "lucide-react";
 import { Badge } from "./ui/badge.js";
+import { OWNERSHIP_LABELS, type Ownership, type WishlistPriority } from "../lib/labels.js";
 
 export type LibraryBook = {
   id: string;
-  ownership: "owned" | "borrowed_in" | "wishlist";
+  ownership: Ownership;
   format: string | null;
   shelf_id: string | null;
   do_not_lend: boolean;
-  wishlist_priority: "high" | "medium" | "low" | null;
+  wishlist_priority: WishlistPriority | null;
   notes: string | null;
   edition: {
     id: string;
@@ -18,12 +19,6 @@ export type LibraryBook = {
     isbn: string | null;
     language: string | null;
   };
-};
-
-const OWNERSHIP_LABELS: Record<LibraryBook["ownership"], string> = {
-  owned: "Owned",
-  borrowed_in: "Borrowed",
-  wishlist: "Wishlist",
 };
 
 export function BookCard({ book }: { book: LibraryBook }) {
