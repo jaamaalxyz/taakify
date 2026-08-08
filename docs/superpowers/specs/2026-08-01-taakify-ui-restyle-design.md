@@ -13,8 +13,8 @@ frontend test coverage from zero. It does not add new pages, routes, or
 backend functionality — it is a visual and testing pass over Plan 1's
 existing surface area.
 
-Not part of a previously-planned Plan 2 (ElectricSQL sync) or Plan 3 (books
-domain) — this is new, unplanned work that gives those future plans a real
+Not part of a previously-planned Plan 2 (books domain) or Plan 3 (ElectricSQL
+sync) — this is new, unplanned work that gives those future plans a real
 design system and component library to build on.
 
 ## 2. Visual Direction
