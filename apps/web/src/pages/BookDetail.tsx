@@ -84,7 +84,7 @@ const NO_SHELF = "none";
 
 export function BookDetail() {
   const { bookId } = useParams<{ bookId: string }>();
-  const { household, user } = useHousehold();
+  const { household, user, members } = useHousehold();
   const navigate = useNavigate();
 
   const [book, setBook] = useState<Book | null>(null);
@@ -404,20 +404,23 @@ export function BookDetail() {
         )}
         {statuses !== null && statuses.length > 0 && (
           <ul className="space-y-1">
-            {statuses.map((s) => (
-              <li key={s.id} className="flex items-center gap-2 text-sm">
-                {/* The status response only carries user_id, not a display
-                    name — there's no household-members list API to resolve
-                    it against. We label the caller's own row "You" and fall
-                    back to the raw user_id for everyone else, noted here as
-                    a known gap rather than inventing a members API. */}
-                <span className="text-muted-foreground">
-                  {s.user_id === user.id ? "You" : `Member (${s.user_id})`}:
-                </span>
-                <StatusBadge status={s.status} />
-                {s.rating != null && <span className="text-xs text-muted-foreground">{s.rating}/5</span>}
-              </li>
-            ))}
+            {statuses.map((s) => {
+              // The status response carries user_id, not a display name.
+              // Resolve it against the household roster from HouseholdProvider
+              // (one shared GET /api/households/:id/members). The caller's own
+              // row is always "You"; if the roster is still loading or a member
+              // somehow isn't in it, fall back to a bare "Member" rather than
+              // flashing the raw uuid.
+              const member = members?.find((m) => m.id === s.user_id);
+              const label = s.user_id === user.id ? "You" : member?.name ?? "Member";
+              return (
+                <li key={s.id} className="flex items-center gap-2 text-sm">
+                  <span className="text-muted-foreground">{label}:</span>
+                  <StatusBadge status={s.status} />
+                  {s.rating != null && <span className="text-xs text-muted-foreground">{s.rating}/5</span>}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>
