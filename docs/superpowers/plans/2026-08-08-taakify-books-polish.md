@@ -42,11 +42,22 @@ user id to a display name. Documented in a code comment as a known gap.
 "Member (8f3a...)" next to a reading status defeats that. This is the most
 user-visible gap in the shipped product.
 
-**Fix:** add `GET /api/households/:id/members` (or fold it into `/api/me`'s
-already-returned memberships) returning `{ id, name, email, role }[]` for the
-caller's household, RLS-scoped via `membership`. `BookDetail` resolves the
-statuses' `user_id` against this list client-side. Cache it in
-`HouseholdProvider` so every screen shares one fetch.
+**Fix:** add a dedicated `GET /api/households/:id/members` returning
+`{ id, name, email, role }[]` for the caller's household, RLS-scoped via
+`membership`. (`/api/me` returns only the caller's *own* memberships —
+`household_id`/`role`/`household_name` per household — so it isn't a natural
+fit for "roster of one household's members"; a dedicated endpoint is.)
+`BookDetail` resolves the statuses' `user_id` against this list client-side.
+Cache it in `HouseholdProvider` so every screen shares one fetch.
+
+**Product decision (members see each other's emails):** this endpoint returns
+`email` alongside `name`/`role` to every household member. That's an
+intentional choice for a family-sharing tool — confirming who's in the house
+is part of the value — and is narrower than it might look: `invite.email` is
+deliberately informational-only in this codebase (see `CLAUDE.md`) because
+invitees may sign up under a different address; member emails here are the
+*authenticated account* emails of already-accepted members, not invite
+identities. Call it out during review so it isn't re-litigated.
 
 **Files:**
 - `apps/api/src/routes/households.ts` — add the members endpoint
