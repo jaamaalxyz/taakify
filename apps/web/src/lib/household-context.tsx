@@ -6,9 +6,16 @@ import { Skeleton } from "../components/ui/skeleton.js";
 
 export type Household = { id: string; name: string; role: string };
 
+export type Member = { id: string; name: string; email: string; role: string };
+
 type HouseholdContextValue = {
   user: Me["user"];
   household: Household;
+  // The household roster, fetched once after /api/me resolves so every screen
+  // shares one GET /api/households/:id/members call. `null` = still loading,
+  // `[]` = loaded but empty (or failed — members are non-critical, so a fetch
+  // failure degrades to an empty list rather than blocking the app).
+  members: Member[] | null;
 };
 
 const HouseholdContext = createContext<HouseholdContextValue | null>(null);
@@ -17,20 +24,34 @@ const HouseholdContext = createContext<HouseholdContextValue | null>(null);
  * Fetches /api/me once on mount and exposes the signed-in user plus their
  * first household membership (this app doesn't support switching between
  * multiple households yet — see membership[0] below, matching the prior
- * Home.tsx behavior). Renders nothing but a Skeleton until loaded, a
- * destructive Alert on fetch failure, and redirects to /onboarding when the
+ * Home.tsx behavior), and the household's member roster (for resolving who
+ * wrote a reading status, etc.). Renders nothing but a Skeleton until loaded,
+ * a destructive Alert on fetch failure, and redirects to /onboarding when the
  * user has zero memberships. Only renders `children` once a household is
  * available.
  */
 export function HouseholdProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);
   const [loadError, setLoadError] = useState("");
+  const [members, setMembers] = useState<Member[] | null>(null);
 
   useEffect(() => {
     api<Me>("/api/me")
       .then(setMe)
       .catch((e) => setLoadError((e as Error).message));
   }, []);
+
+  const householdId = me && me.memberships.length > 0 ? me.memberships[0].household_id : null;
+
+  // Fetch the roster once we know the household. Members are non-critical
+  // (only used to render display names alongside reading statuses today), so a
+  // failure degrades to an empty list — the rest of the app still works.
+  useEffect(() => {
+    if (!householdId) return;
+    api<{ members: Member[] }>(`/api/households/${householdId}/members`)
+      .then((data) => setMembers(data.members))
+      .catch(() => setMembers([]));
+  }, [householdId]);
 
   if (loadError)
     return (
@@ -58,6 +79,7 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
   const value: HouseholdContextValue = {
     user: me.user,
     household: { id: membership.household_id, name: membership.household_name, role: membership.role },
+    members,
   };
 
   return <HouseholdContext.Provider value={value}>{children}</HouseholdContext.Provider>;

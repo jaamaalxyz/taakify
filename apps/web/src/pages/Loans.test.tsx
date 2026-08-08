@@ -116,7 +116,7 @@ function renderLoans() {
 beforeEach(() => {
   vi.mocked(api).mockReset();
   vi.mocked(toast).mockReset();
-  vi.mocked(useHousehold).mockReturnValue({ user, household });
+  vi.mocked(useHousehold).mockReturnValue({ user, household, members: [] });
 });
 
 describe("Loans", () => {

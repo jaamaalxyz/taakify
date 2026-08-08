@@ -35,6 +35,10 @@ beforeAll(() => {
 
 const household = { id: "h1", name: "Family Library", role: "owner" };
 const user = { id: "u1", email: "a@b.com", name: "Ada" };
+const members = [
+  { id: "u1", name: "Ada", email: "a@b.com", role: "owner" },
+  { id: "u2", name: "Grace", email: "g@b.com", role: "member" },
+];
 
 const book = {
   id: "b1",
@@ -64,6 +68,17 @@ const statuses = [
     started_at: null,
     finished_at: null,
     rating: null,
+    review_note: null,
+    updated_at: "2026-01-01T00:00:00Z",
+  },
+  {
+    id: "rs2",
+    book_id: "b1",
+    user_id: "u2",
+    status: "finished",
+    started_at: null,
+    finished_at: null,
+    rating: 5,
     review_note: null,
     updated_at: "2026-01-01T00:00:00Z",
   },
@@ -160,7 +175,7 @@ beforeEach(() => {
   vi.mocked(api).mockReset();
   vi.mocked(toast).mockReset();
   navigateMock.mockReset();
-  vi.mocked(useHousehold).mockReturnValue({ user, household });
+  vi.mocked(useHousehold).mockReturnValue({ user, household, members });
 });
 
 describe("BookDetail", () => {
@@ -171,7 +186,11 @@ describe("BookDetail", () => {
     expect(await screen.findByText("Dune")).toBeInTheDocument();
     expect(screen.getByText("Frank Herbert")).toBeInTheDocument();
     expect(screen.getByText(/9780000000001/)).toBeInTheDocument();
+    // The caller's own row is labeled "You"; another member's row resolves to
+    // their roster name (not a raw uuid) via the household members list.
     expect(await screen.findByText("You:")).toBeInTheDocument();
+    expect(screen.getByText("Grace:")).toBeInTheDocument();
+    expect(screen.queryByText(/Member \(/)).not.toBeInTheDocument();
   });
 
   it("shows a load error when the book fetch fails", async () => {

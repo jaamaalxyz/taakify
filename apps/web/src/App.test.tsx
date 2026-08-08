@@ -52,6 +52,7 @@ describe("App routing", () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path === "/api/me") return me;
       if (path.startsWith("/api/tags")) return { tags: [] };
+      if (path.includes("/members")) return { members: [] };
       return { books: [] };
     });
     renderApp("/signin");
@@ -64,6 +65,7 @@ describe("App routing", () => {
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path === "/api/me") return me;
       if (path.startsWith("/api/tags")) return { tags: [] };
+      if (path.includes("/members")) return { members: [] };
       return { books: [] };
     });
     renderApp("/library");
