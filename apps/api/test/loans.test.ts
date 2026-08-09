@@ -201,6 +201,30 @@ describe("loans", () => {
     expect(owned.books.find((b: any) => b.id === book.id)).toBeUndefined();
   });
 
+  it("GET /api/loans?bookId= filters to only that book's loans", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const bookA = await addBook(cookie, house.id, "Dune");
+    const bookB = await addBook(cookie, house.id, "Emma");
+    const loanA = await createLoan(cookie, {
+      bookId: bookA.id,
+      contactName: "Ivy",
+      direction: "lent_out",
+    });
+    await createLoan(cookie, {
+      bookId: bookB.id,
+      contactName: "Jack",
+      direction: "lent_out",
+    });
+
+    const list = await (
+      await app.request(`/api/loans?householdId=${house.id}&bookId=${bookA.id}`, { headers: { cookie } })
+    ).json();
+    expect(list.loans).toHaveLength(1);
+    expect(list.loans[0].id).toBe(loanA.body.loan.id);
+    expect(list.loans[0].book.id).toBe(bookA.id);
+  });
+
   it("RLS: household B never sees household A's loans", async () => {
     const a = await signUp(app);
     const houseA = await createHousehold(a.cookie, "A");

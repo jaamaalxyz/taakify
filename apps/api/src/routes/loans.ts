@@ -161,7 +161,7 @@ loans.patch("/:id", async (c) => {
   return c.json({ loan: nestLoan(loanRow) });
 });
 
-// GET /api/loans?householdId=&active=&contactId=
+// GET /api/loans?householdId=&active=&contactId=&bookId=
 loans.get("/", async (c) => {
   const user = c.get("user");
   const householdId = c.req.query("householdId");
@@ -169,12 +169,14 @@ loans.get("/", async (c) => {
 
   const active = c.req.query("active");
   const contactId = c.req.query("contactId");
+  const bookId = c.req.query("bookId");
 
   const where: string[] = ["l.household_id = $1", "l.deleted_at IS NULL"];
   const params: unknown[] = [householdId];
   let i = 2;
   if (active === "true") { where.push("l.returned_date IS NULL"); }
   if (contactId) { where.push(`l.contact_id = $${i}`); params.push(contactId); i++; }
+  if (bookId) { where.push(`l.book_id = $${i}`); params.push(bookId); i++; }
 
   const rows = await withUser(user.id, (client) =>
     client.query(
