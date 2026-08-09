@@ -16,6 +16,10 @@ vi.mock("sonner", () => ({ toast: vi.fn() }));
 
 const household = { id: "h1", name: "Family Library", role: "owner" };
 const user = { id: "u1", email: "a@b.com", name: "Ada" };
+const members = [
+  { id: "u1", name: "Ada", email: "a@b.com", role: "owner" },
+  { id: "u2", name: "Grace", email: "g@b.com", role: "member" },
+];
 
 const books = [
   { id: "b1", ownership: "owned", wishlist_priority: null, edition: { id: "e1", title: "Dune", authors: "Frank Herbert" } },
@@ -56,7 +60,7 @@ function renderProfile() {
 beforeEach(() => {
   vi.mocked(api).mockReset();
   vi.mocked(toast).mockReset();
-  vi.mocked(useHousehold).mockReturnValue({ user, household, members: [] });
+  vi.mocked(useHousehold).mockReturnValue({ user, household, members });
 });
 
 describe("Profile", () => {
@@ -65,7 +69,7 @@ describe("Profile", () => {
     renderProfile();
 
     expect(screen.getByText("Family Library")).toBeInTheDocument();
-    expect(screen.getByText(/owner/)).toBeInTheDocument();
+    expect(screen.getByText(/Signed in as Ada/)).toBeInTheDocument();
     // owned=1, borrowed_in=1, wishlist=2 — "1" appears for both the Owned
     // and Borrowed stat cards, so assert on count rather than uniqueness.
     await waitFor(() => expect(screen.getAllByText("1")).toHaveLength(2));
@@ -79,6 +83,16 @@ describe("Profile", () => {
     const highEl = await screen.findByText("High Pick");
     const lowEl = await screen.findByText("Low Pick");
     expect(highEl.compareDocumentPosition(lowEl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("renders each household member's name and role", async () => {
+    mockApi();
+    renderProfile();
+
+    expect(await screen.findByText("Ada")).toBeInTheDocument();
+    expect(screen.getByText("Grace")).toBeInTheDocument();
+    expect(screen.getByText("owner")).toBeInTheDocument();
+    expect(screen.getByText("member")).toBeInTheDocument();
   });
 
   it("invite dialog opens and creates an invite, showing the shareable URL", async () => {
