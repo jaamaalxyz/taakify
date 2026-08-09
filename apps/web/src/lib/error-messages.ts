@@ -19,12 +19,17 @@ const NETWORK_MESSAGE = "Couldn't connect. Check your connection and try again."
 
 // Server messages that are already clear, non-technical, and actionable —
 // safe to pass straight through instead of collapsing to the generic
-// fallback. Covers "nothing to update" and the validation messages named in
-// the issue (direction / rating / reading-status enum).
+// fallback. Covers "nothing to update", the validation messages named in
+// the issue (direction / rating / reading-status enum), and the 409
+// "book already tagged" conflict from POST /api/books/:bookId/tags — that
+// message doesn't get any clearer by hiding it behind generic advice, and
+// the underlying condition won't change on retry, so the user needs to see
+// the real reason.
 const MESSAGE_ALLOWLIST = new Set<string>([
   "nothing to update",
   "direction must be 'lent_out' or 'borrowed_in'",
   "rating must be between 1 and 5",
+  "book already tagged",
 ]);
 
 // "status must be one of ..." has the valid values interpolated onto the

@@ -109,14 +109,14 @@ navigation away).
 - `apps/web/src/pages/Loans.tsx` — extract the lend form if sharing
 - `apps/web/src/pages/BookDetail.test.tsx` — test the loan-status display (active + overdue + none) and the lend POST
 
-### Issue 4 — Raw server error strings leak to the UI on every screen, not just Add (P2, upgraded from P3 and widened)
+### Issue 4 — Raw server error strings leak to the UI on every Books-domain screen, not just Add (P2, upgraded from P3 and widened)
 
 **Where:** the original framing scoped this to `Add.tsx` alone. It's not
-scoped there — it's the app's default error-handling pattern everywhere.
-Every screen's mutation handlers do the same thing: `catch (err) {
-setXError((err as Error).message) }`, then render that string in a
-destructive `Alert`. A repo-wide check of every screen's error state turns up
-**~15 separate render sites** doing this identically:
+scoped there — it's the default error-handling pattern across every
+Books-domain screen. Every screen's mutation handlers do the same thing:
+`catch (err) { setXError((err as Error).message) }`, then render that string
+in a destructive `Alert`. A repo-wide check of every Books-domain screen's
+error state turns up **~15 separate render sites** doing this identically:
 
 | Screen | Raw-error render sites |
 | --- | --- |
@@ -126,6 +126,16 @@ destructive `Alert`. A repo-wide check of every screen's error state turns up
 | `Bookcases.tsx` | 3 (load, add bookcase, add/edit shelf) |
 | `Profile.tsx` | 1 (invite) |
 | `Library.tsx` | 1 (load) |
+
+The app-shell's own `/api/me` load failure (`household-context.tsx`) is also
+converted as part of this issue, since it's the first error a user could ever
+hit (e.g. an expired session) and the fix is a trivial one-line swap using
+the same `friendlyError()` helper. The auth/invite/onboarding flow
+(`InviteAccept.tsx`, `Onboarding.tsx`) is deliberately left out of scope —
+not because it doesn't matter, but because those screens live outside the
+Books domain and their existing raw error text (`"expired"`, `"already
+accepted"`) is already clear enough that converting it isn't the same
+problem this issue targets.
 
 And the server-side strings are genuinely unfriendly and, worse,
 **ambiguous**: `grep`-ing every route's `c.json({ error: ... })` call shows
@@ -178,6 +188,7 @@ shift under it later.
 - `apps/web/src/lib/api.ts` — `ApiError` with `status`
 - `apps/web/src/lib/error-messages.ts` — new, `friendlyError()` + its own test file (same rigor as `labels.test.ts`)
 - `apps/web/src/pages/Add.tsx`, `BookDetail.tsx`, `Loans.tsx`, `Bookcases.tsx`, `Profile.tsx`, `Library.tsx` — swap every `(err as Error).message` render site to `friendlyError(err)`
+- `apps/web/src/lib/household-context.tsx` — the app-shell's `/api/me` load-failure Alert, plus its own new test file
 
 ### Issue 5 — Build chunk-size advisory (P3, informational)
 
@@ -238,6 +249,15 @@ against data this screen can already read from context.
   105 API / 66 web tests green. **Issue 6 below is the direct follow-on this
   unlocked** — the roster is already cached and unused everywhere but
   BookDetail.
+- **Raw server error strings leak to the UI (Issue 4)** — `apps/web/src/lib/api.ts`'s
+  `api()` now throws a status-carrying `ApiError`, and `apps/web/src/lib/error-messages.ts`'s
+  `friendlyError()` maps it to user-facing copy (401/403/404 branches, plus an
+  allowlist for already-clear validation/conflict messages like `"nothing to
+  update"` and `"book already tagged"`). All six Books-domain screens
+  (`Add`, `BookDetail`, `Loans`, `Bookcases`, `Profile`, `Library`) and the
+  app-shell's `household-context.tsx` `/api/me` load failure now use it;
+  `InviteAccept.tsx`/`Onboarding.tsx` are deliberately left as-is (see Issue
+  4 above).
 
 ---
 

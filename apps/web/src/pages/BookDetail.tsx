@@ -142,12 +142,7 @@ export function BookDetail() {
     if (!bookId) return;
     setBook(null);
     setLoadError("");
-    // api() throws the same shape of Error for a 404 as for any other
-    // failure (network error, 500, etc.) — it only carries the server's
-    // `error` message text, not the status code. We deliberately don't
-    // string-match on that message to special-case "not found"; showing
-    // whatever message came back covers both cases correctly, if less
-    // precisely than a dedicated 404 UI would.
+    // See lib/error-messages.ts for how errors are mapped to user-facing copy.
     api<{ book: Book }>(`/api/books/${bookId}`)
       .then((data) => setBook(data.book))
       .catch((e) => setLoadError(friendlyError(e)));

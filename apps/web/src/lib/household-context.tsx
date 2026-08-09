@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { Navigate } from "react-router-dom";
 import { api, type Me } from "./api.js";
+import { friendlyError } from "./error-messages.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 
@@ -38,7 +39,7 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     api<Me>("/api/me")
       .then(setMe)
-      .catch((e) => setLoadError((e as Error).message));
+      .catch((e) => setLoadError(friendlyError(e)));
   }, []);
 
   const householdId = me && me.memberships.length > 0 ? me.memberships[0].household_id : null;

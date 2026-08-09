@@ -40,6 +40,10 @@ describe("friendlyError", () => {
     );
   });
 
+  it("passes through the allowlisted 409 'book already tagged' conflict message", () => {
+    expect(friendlyError(new ApiError("book already tagged", 409))).toBe("book already tagged");
+  });
+
   it("passes through the reading-status enum message by stable prefix, whatever the enum list is", () => {
     expect(
       friendlyError(
