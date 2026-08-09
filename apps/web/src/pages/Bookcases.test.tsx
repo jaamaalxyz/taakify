@@ -3,11 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { Bookcases } from "./Bookcases.js";
-import { api } from "../lib/api.js";
+import { api, ApiError } from "../lib/api.js";
 import { useHousehold } from "../lib/household-context.js";
 import { toast } from "sonner";
 
-vi.mock("../lib/api.js", () => ({ api: vi.fn() }));
+vi.mock("../lib/api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/api.js")>();
+  return { ...actual, api: vi.fn() };
+});
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
@@ -79,10 +82,14 @@ describe("Bookcases", () => {
   });
 
   it("shows a destructive alert when loading fails", async () => {
-    vi.mocked(api).mockRejectedValue(new Error("boom"));
+    // An unmapped 500 renders friendlyError()'s generic fallback, not the
+    // raw server message.
+    vi.mocked(api).mockRejectedValue(new ApiError("boom", 500));
     renderBookcases();
 
-    expect(await screen.findByText(/Couldn't load bookcases: boom/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Couldn't load bookcases: Something went wrong/)
+    ).toBeInTheDocument();
   });
 
   it("creating a bookcase calls POST /api/bookcases", async () => {

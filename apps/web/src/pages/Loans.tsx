@@ -4,6 +4,7 @@ import { BookOpen, HandCoins } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
 import { api } from "../lib/api.js";
+import { friendlyError } from "../lib/error-messages.js";
 import { LOAN_DIRECTION_LABELS, type LoanDirection as Direction } from "../lib/labels.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
@@ -167,7 +168,7 @@ export function Loans() {
     const params = new URLSearchParams({ householdId: household.id });
     api<{ loans: Loan[] }>(`/api/loans?${params.toString()}`)
       .then((data) => setLoans(data.loans))
-      .catch((e) => setLoadError((e as Error).message));
+      .catch((e) => setLoadError(friendlyError(e)));
   }
 
   function loadContacts() {
@@ -176,7 +177,7 @@ export function Loans() {
       .then((data) => setContacts(data.contacts))
       .catch((e) => {
         setContacts([]);
-        setContactsLoadError((e as Error).message);
+        setContactsLoadError(friendlyError(e));
       });
   }
 
@@ -186,7 +187,7 @@ export function Loans() {
       .then((data) => setBooks(data.books))
       .catch((e) => {
         setBooks([]);
-        setBooksLoadError((e as Error).message);
+        setBooksLoadError(friendlyError(e));
       });
   }
 
@@ -208,7 +209,7 @@ export function Loans() {
       toast("Marked as returned");
       loadLoans();
     } catch (err) {
-      setActionError((err as Error).message);
+      setActionError(friendlyError(err));
     } finally {
       setReturningId(null);
     }
@@ -262,7 +263,7 @@ export function Loans() {
       resetContactForm();
       setContactOpen(false);
     } catch (err) {
-      setContactError((err as Error).message);
+      setContactError(friendlyError(err));
     } finally {
       setSavingContact(false);
     }
@@ -301,7 +302,7 @@ export function Loans() {
       loadLoans();
       loadContacts();
     } catch (err) {
-      setLendError((err as Error).message);
+      setLendError(friendlyError(err));
     } finally {
       setSavingLoan(false);
     }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
 import { api } from "../lib/api.js";
+import { friendlyError } from "../lib/error-messages.js";
 import { type Ownership } from "../lib/labels.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.js";
 import { Input } from "../components/ui/input.js";
@@ -155,7 +156,7 @@ export function Add() {
         setActiveTab("isbn");
       }
     } catch (err) {
-      setSubmitError((err as Error).message);
+      setSubmitError(friendlyError(err));
     } finally {
       setSubmitting(false);
     }

@@ -3,11 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach, beforeAll } from "vitest";
 import { Loans } from "./Loans.js";
-import { api } from "../lib/api.js";
+import { api, ApiError } from "../lib/api.js";
 import { useHousehold } from "../lib/household-context.js";
 import { toast } from "sonner";
 
-vi.mock("../lib/api.js", () => ({ api: vi.fn() }));
+vi.mock("../lib/api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/api.js")>();
+  return { ...actual, api: vi.fn() };
+});
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
@@ -188,15 +191,17 @@ describe("Loans", () => {
   });
 
   it("shows a destructive alert when loading loans fails", async () => {
+    // An unmapped 500 renders friendlyError()'s generic fallback, not the
+    // raw server message.
     vi.mocked(api).mockImplementation(async (path: string) => {
-      if (path.startsWith("/api/loans")) throw new Error("boom");
+      if (path.startsWith("/api/loans")) throw new ApiError("boom", 500);
       if (path.startsWith("/api/contacts")) return { contacts: [] };
       if (path.startsWith("/api/books")) return { books: [] };
       throw new Error("unexpected");
     });
     renderLoans();
 
-    expect(await screen.findByText(/Couldn't load loans: boom/)).toBeInTheDocument();
+    expect(await screen.findByText(/Couldn't load loans: Something went wrong/)).toBeInTheDocument();
   });
 
   it("creating a new contact calls POST /api/contacts", async () => {

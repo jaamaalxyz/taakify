@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { BookOpen } from "lucide-react";
 import { useHousehold } from "../lib/household-context.js";
 import { api } from "../lib/api.js";
+import { friendlyError } from "../lib/error-messages.js";
 import {
   OWNERSHIP_LABELS,
   READING_STATUS_LABELS,
@@ -100,7 +101,7 @@ export function Library() {
         setHasMore(data.books.length === PAGE_SIZE);
       })
       .catch((e) => {
-        if (!cancelled) setLoadError((e as Error).message);
+        if (!cancelled) setLoadError(friendlyError(e));
       });
     return () => {
       cancelled = true;
@@ -116,7 +117,7 @@ export function Library() {
         setBooks((prev) => [...(prev ?? []), ...data.books]);
         setHasMore(data.books.length === PAGE_SIZE);
       })
-      .catch((e) => setLoadError((e as Error).message))
+      .catch((e) => setLoadError(friendlyError(e)))
       .finally(() => setLoadingMore(false));
   }
 

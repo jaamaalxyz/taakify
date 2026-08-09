@@ -6,7 +6,10 @@ import { Library } from "./Library.js";
 import { api } from "../lib/api.js";
 import { useHousehold } from "../lib/household-context.js";
 
-vi.mock("../lib/api.js", () => ({ api: vi.fn() }));
+vi.mock("../lib/api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/api.js")>();
+  return { ...actual, api: vi.fn() };
+});
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
 
 // Radix Select needs these DOM APIs, which jsdom doesn't implement, to open
@@ -175,12 +178,17 @@ describe("Library", () => {
   });
 
   it("shows a destructive alert when the fetch fails", async () => {
+    // A plain (non-ApiError) failure — e.g. a network TypeError from fetch
+    // itself before any response — renders friendlyError()'s "couldn't
+    // connect" copy, not the raw error message.
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path.startsWith("/api/tags")) return { tags: [] };
-      throw new Error("Network error");
+      throw new TypeError("Network error");
     });
     renderLibrary();
 
-    expect(await screen.findByText(/Couldn't load your books: Network error/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Couldn't load your books: Couldn't connect/)
+    ).toBeInTheDocument();
   });
 });

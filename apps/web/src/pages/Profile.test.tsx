@@ -7,7 +7,10 @@ import { api } from "../lib/api.js";
 import { useHousehold } from "../lib/household-context.js";
 import { toast } from "sonner";
 
-vi.mock("../lib/api.js", () => ({ api: vi.fn() }));
+vi.mock("../lib/api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/api.js")>();
+  return { ...actual, api: vi.fn() };
+});
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 

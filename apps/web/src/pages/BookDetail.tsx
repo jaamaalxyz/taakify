@@ -4,6 +4,7 @@ import { BookOpen, MoreVertical } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
 import { api } from "../lib/api.js";
+import { friendlyError } from "../lib/error-messages.js";
 import {
   OWNERSHIP_LABELS,
   READING_STATUS_LABELS,
@@ -141,15 +142,10 @@ export function BookDetail() {
     if (!bookId) return;
     setBook(null);
     setLoadError("");
-    // api() throws the same shape of Error for a 404 as for any other
-    // failure (network error, 500, etc.) — it only carries the server's
-    // `error` message text, not the status code. We deliberately don't
-    // string-match on that message to special-case "not found"; showing
-    // whatever message came back covers both cases correctly, if less
-    // precisely than a dedicated 404 UI would.
+    // See lib/error-messages.ts for how errors are mapped to user-facing copy.
     api<{ book: Book }>(`/api/books/${bookId}`)
       .then((data) => setBook(data.book))
-      .catch((e) => setLoadError((e as Error).message));
+      .catch((e) => setLoadError(friendlyError(e)));
   }
 
   function loadStatuses() {
@@ -166,14 +162,14 @@ export function BookDetail() {
           setMyFinishedAt(mine.finished_at);
         }
       })
-      .catch((e) => setLoadError((e as Error).message));
+      .catch((e) => setLoadError(friendlyError(e)));
   }
 
   function loadBookTags() {
     if (!bookId) return;
     api<{ tags: Tag[] }>(`/api/books/${bookId}/tags`)
       .then((data) => setBookTags(data.tags))
-      .catch((e) => setTagError((e as Error).message));
+      .catch((e) => setTagError(friendlyError(e)));
   }
 
   useEffect(() => {
@@ -221,7 +217,7 @@ export function BookDetail() {
       toast("Status updated");
       loadStatuses();
     } catch (err) {
-      setStatusError((err as Error).message);
+      setStatusError(friendlyError(err));
     } finally {
       setSavingStatus(false);
     }
@@ -260,7 +256,7 @@ export function BookDetail() {
       setSelectedTagId("");
       setNewTagName("");
     } catch (err) {
-      setTagError((err as Error).message);
+      setTagError(friendlyError(err));
     } finally {
       setAddingTag(false);
     }
@@ -273,7 +269,7 @@ export function BookDetail() {
       loadBookTags();
       toast(`Removed tag "${tag.name}"`);
     } catch (err) {
-      setTagError((err as Error).message);
+      setTagError(friendlyError(err));
     }
   }
 
@@ -290,7 +286,7 @@ export function BookDetail() {
       toast("Shelf updated");
       setMoveShelfOpen(false);
     } catch (err) {
-      setShelfError((err as Error).message);
+      setShelfError(friendlyError(err));
     } finally {
       setSavingShelf(false);
     }
@@ -315,7 +311,7 @@ export function BookDetail() {
       toast("Book updated");
       setEditOpen(false);
     } catch (err) {
-      setEditError((err as Error).message);
+      setEditError(friendlyError(err));
     } finally {
       setSavingEdit(false);
     }
@@ -330,7 +326,7 @@ export function BookDetail() {
       toast("Book deleted");
       navigate("/library");
     } catch (err) {
-      setDeleteError((err as Error).message);
+      setDeleteError(friendlyError(err));
       setDeleting(false);
     }
   }

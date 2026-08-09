@@ -3,11 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach, beforeAll } from "vitest";
 import { BookDetail } from "./BookDetail.js";
-import { api } from "../lib/api.js";
+import { api, ApiError } from "../lib/api.js";
 import { useHousehold } from "../lib/household-context.js";
 import { toast } from "sonner";
 
-vi.mock("../lib/api.js", () => ({ api: vi.fn() }));
+vi.mock("../lib/api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/api.js")>();
+  return { ...actual, api: vi.fn() };
+});
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
@@ -194,10 +197,15 @@ describe("BookDetail", () => {
   });
 
   it("shows a load error when the book fetch fails", async () => {
-    vi.mocked(api).mockRejectedValue(new Error("not found"));
+    // A 404 from the API renders friendlyError()'s status-based copy, not
+    // the raw ("not found" is reused across unrelated routes and can't be
+    // shown to the user as-is — see lib/error-messages.ts).
+    vi.mocked(api).mockRejectedValue(new ApiError("not found", 404));
     renderBookDetail();
 
-    expect(await screen.findByText(/Couldn't load this book: not found/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Couldn't load this book: That doesn't exist anymore/)
+    ).toBeInTheDocument();
   });
 
   it("editing my status calls PUT /api/books/:id/status", async () => {

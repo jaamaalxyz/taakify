@@ -3,6 +3,7 @@ import { Library as LibraryIcon } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
 import { api } from "../lib/api.js";
+import { friendlyError } from "../lib/error-messages.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Badge } from "../components/ui/badge.js";
@@ -50,7 +51,7 @@ export function Bookcases() {
     setLoadError("");
     api<{ bookcases: Bookcase[] }>(`/api/bookcases?householdId=${household.id}`)
       .then((data) => setBookcases(data.bookcases))
-      .catch((e) => setLoadError((e as Error).message));
+      .catch((e) => setLoadError(friendlyError(e)));
   }
 
   useEffect(() => {
@@ -73,7 +74,7 @@ export function Bookcases() {
       setAddBookcaseOpen(false);
       loadBookcases();
     } catch (err) {
-      setBookcaseError((err as Error).message);
+      setBookcaseError(friendlyError(err));
     } finally {
       setSavingBookcase(false);
     }
@@ -94,7 +95,7 @@ export function Bookcases() {
       setAddShelfFor(null);
       loadBookcases();
     } catch (err) {
-      setShelfError((err as Error).message);
+      setShelfError(friendlyError(err));
     } finally {
       setSavingShelf(false);
     }
@@ -114,7 +115,7 @@ export function Bookcases() {
       setEditShelf(null);
       loadBookcases();
     } catch (err) {
-      setEditShelfError((err as Error).message);
+      setEditShelfError(friendlyError(err));
     } finally {
       setSavingEditShelf(false);
     }
