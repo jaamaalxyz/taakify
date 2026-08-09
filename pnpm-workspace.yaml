@@ -3,3 +3,15 @@ packages:
   - "packages/*"
 allowBuilds:
   esbuild: true
+
+# Supply-chain hardening: refuse to install a package version until it has
+# been publicly available for at least a week. A malicious or compromised
+# publish is usually caught and unpublished/deprecated within days; this
+# closes the window where `pnpm install`/`pnpm add` could otherwise pull a
+# version before that happens. Value is in minutes (10080 = 7 days).
+# https://pnpm.io/settings#minimumreleaseage
+minimumReleaseAge: 10080
+# Exempt fast-moving first-party/internal packages here if the delay ever
+# becomes a problem for a specific dependency (none needed yet):
+# minimumReleaseAgeExclude:
+#   - "@taakify/*"
