@@ -4,6 +4,7 @@ import { Copy } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
 import { api } from "../lib/api.js";
+import { friendlyError } from "../lib/error-messages.js";
 import { priorityRank, WISHLIST_PRIORITY_LABELS, type Ownership, type WishlistPriority } from "../lib/labels.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
@@ -43,7 +44,7 @@ export function Profile() {
   useEffect(() => {
     api<{ books: Book[] }>(`/api/books?householdId=${household.id}`)
       .then((data) => setBooks(data.books))
-      .catch((e) => setLoadError((e as Error).message));
+      .catch((e) => setLoadError(friendlyError(e)));
   }, [household.id]);
 
   async function handleInvite(e: FormEvent) {
@@ -59,7 +60,7 @@ export function Profile() {
       setInviteUrl(`${location.origin}${data.url}`);
       toast("Invite created");
     } catch (err) {
-      setInviteError((err as Error).message);
+      setInviteError(friendlyError(err));
     } finally {
       setSendingInvite(false);
     }
