@@ -116,6 +116,19 @@ Add `"packages/*"` is already in `pnpm-workspace.yaml` (Plan 1). Add `@taakify/s
 
 `packages/shared/test/logic.test.ts` — assert `isOverdue(loan)` matches the server's `returned_date IS NULL AND due_date < today`; assert ownership-badge mapping; assert enum values match the DB `CHECK` constraints (the single source is now here, not the migration).
 
+**`isOverdue` regression guard (property-style matrix test).** This is the one place where "extract to shared" has a real divergence risk: the server computes `overdue` in SQL (`returned_date IS NULL AND due_date IS NOT NULL AND due_date < CURRENT_DATE`), and this codebase has already been bitten by JS/SQL date drift (the `todayStr()` / `dateStr()` helpers exist precisely because `toISOString()` shifts the day in non-UTC zones). Lock the JS helper to the SQL semantics with an exhaustive matrix covering every edge where the two can drift:
+
+| `returned_date` | `due_date` | `today` | expected overdue | why |
+|---|---|---|---|---|
+| `NULL` | yesterday | today | `true` | past due, not returned |
+| `NULL` | **today** | today | `false` | SQL uses `<`, not `<=` — due today is not overdue |
+| `NULL` | tomorrow | today | `false` | not yet due |
+| `NULL` | `NULL` | today | `false` | no due date |
+| yesterday (returned) | yesterday | today | `false` | already returned |
+| today (returned) | last week | today | `false` | returned, even if late |
+
+Plus a timezone-sensitivity case: build `due_date` and `today` from local Date components (the same `todayStr()` approach) rather than `toISOString()`, and assert the result is stable regardless of the runner's timezone. The test asserts the shared `isOverdue(dueDate, returnedDate, today)` output matches `returned_date IS NULL AND due_date IS NOT NULL AND due_date < today` for every row in the matrix.
+
 - [ ] **Step 3: Implement** `src/types.ts` (row types + enums), `src/contracts.ts` (write-endpoint request/response shapes for books/loans/etc., matching the Books plan's routes), `src/logic.ts` (pure helpers), `src/index.ts` (re-exports).
 
 - [ ] **Step 4: Run → PASS.**
@@ -148,7 +161,9 @@ Add `"packages/*"` is already in `pnpm-workspace.yaml` (Plan 1). Add `@taakify/s
 
 - [ ] **Step 2: Unit test** — feed a fake operation stream into the apply function against in-memory PGlite; assert rows materialize and a newer `updated_at` overwrites an older one (last-write-wins).
 
-- [ ] **Step 3: Commit** — `feat(web): Electric shape stream into PGlite`.
+- [ ] **Step 3: Cold-start loading state.** On first load (or after sign-in), PGlite is empty until the shape's initial catch-up streams the household's rows in. A blank screen during that window — empty lists, "No books yet" — reads as "my library is gone," which is the worst possible first impression. Expose a `synced: boolean` from the shape module (false until the first shape catch-up completes, true thereafter) and have screens show their existing `Skeleton` loading state (the pattern every screen already uses) while `synced` is false. Rows progressively fill in as the shape applies them. This state is defensive: even if Task 8's bootstrap endpoint makes the window negligible, the loading state must exist so a slow initial sync never looks like data loss.
+
+- [ ] **Step 4: Commit** — `feat(web): Electric shape stream into PGlite`.
 
 ---
 
@@ -161,12 +176,14 @@ The write-path heart. Highest-risk piece after loans (spec §9).
 - [ ] **Step 1: Failing test** (`outbox.test.ts`, in-memory PGlite):
   - `enqueue` inserts an outbox row and an optimistic local row in one PGlite transaction.
   - The retry loop flushes a pending row via a mocked `fetch`, acks on 2xx (deletes the row), and increments `attempts` + sets `next_retry_at` with backoff on failure.
-  - After N failures, the row is marked `dead` (status) and surfaced (not silently dropped — spec §8).
+  - After N failures, the row is marked `dead` (status) and surfaced via a non-blocking toast with a **Retry** action (see Step 3 for the surfacing contract — the row is never silently dropped).
   - Retry resumes on `online` event and on a periodic timer.
 
 - [ ] **Step 2: Run → FAIL.**
 
 - [ ] **Step 3: Implement** `outbox.ts` — `enqueue(endpoint, method, body, optimisticSql)`, a `flush()` that reads due rows and calls `fetch` with `credentials: "include"`, backoff schedule (e.g. 1s, 2s, 5s, 15s, 60s, then dead-letter), `window.addEventListener("online", flush)`, and a `setInterval(flush, 5000)`. Target the **existing** Books-plan write endpoints (no new server code).
+
+  **Dead-letter surfacing contract.** When a row exhausts its retries (status → `dead`), the outbox fires `toast.error()` with a Retry action button — the first action toast in the codebase, but sonner v2.0.7 fully supports it (`toast.error(msg, { action: { label: "Retry", onClick } })`). The toast copy should name the operation that failed in human terms (e.g. `"Couldn't save: mark Dune as finished"`, `"Couldn't save: add contact Alex"`), derived from the outbox row's endpoint/body. Retry re-queues the row: resets `attempts` to 0, `status` to `pending`, clears `next_retry_at`, and triggers an immediate `flush()`. The toast is non-blocking (the user can ignore it) but unmissable; a dismissed toast does NOT abandon the row — the dead-lettered row persists in PGlite and remains visible in the SyncBadge's failed-operations list (Task 7) until the user explicitly Dismisses it there. This two-layer design (toast for immediate awareness, badge list for durable visibility) ensures a dead-lettered write is never silently lost.
 
 - [ ] **Step 4: Run → PASS.**
 
@@ -207,25 +224,46 @@ The write-path heart. Highest-risk piece after loans (spec §9).
 
 **Files:** `apps/web/src/components/SyncBadge.tsx`, `apps/web/src/lib/sync/use-sync-status.ts`, modify `AppShell.tsx`, modify sign-out.
 
-- [ ] **Step 1: `use-sync-status` hook** — `online: boolean`, `pending: number` (count of non-dead outbox rows). Subscribes to `online`/`offline` events and polls outbox count.
+- [ ] **Step 1: `use-sync-status` hook** — `online: boolean`, `pending: number` (count of non-dead outbox rows), `dead: number` (count of dead-lettered rows). Subscribes to `online`/`offline` events and polls outbox counts.
 
-- [ ] **Step 2: `SyncBadge`** — shows "Offline" (destructive) when offline, "Saving…" (muted) when `pending > 0`, nothing otherwise. Placed in `AppShell` header. No modals.
+- [ ] **Step 2: `SyncBadge`** — four states, placed in the `AppShell` header alongside the household name (no existing slot — introduce one):
+  - `Offline` → destructive `Badge` (no network)
+  - `Saving…` → secondary `Badge` (`pending > 0`, actively trying)
+  - `Sync issue` → destructive `Badge` with a dot indicator (`dead > 0` — permanently failed writes exist). Tapping/clicking it opens a small list (a `Dialog` or popover) of the failed operations, each with **Retry** (re-queues the row, same as Task 5's toast action) and **Dismiss** (marks the row `dismissed`, removing it from the list — the user explicitly abandons the write). This list is the durable visibility layer that complements Task 5's transient toast.
+  - *nothing* → all synced (`pending === 0 && dead === 0`). The healthy default — render `null`, matching `StatusBadge`'s null-on-quiet precedent. No badge when everything's fine.
 
-- [ ] **Step 3: Sign-out clears IndexedDB** — on `authClient.signOut()`, `await db.close()` then clear the IDB directory (`indexedDB.deleteDatabase("taakify")` or PGlite's equivalent) so a shared device never leaks the prior household's data. Reload to a clean state.
+- [ ] **Step 3: Sign-out with pending-writes protection.** Today the sign-out button fires `authClient.signOut().finally(() => location.reload())` directly. Gate it on outbox state:
+  1. **Outbox empty** (no pending, no dead-lettered) → sign out immediately, no friction. The common case.
+  2. **Outbox has pending rows** → open a warning `Dialog` first, reusing the two-phase shape of the do-not-lend warning (destructive `Alert` + `DialogFooter` with Cancel / Confirm). Copy: *"You have N unsaved changes. Sign out anyway? They'll be lost."* On confirm: best-effort flush the outbox if online (short timeout — don't hang sign-out on a dead network), then clear IndexedDB, then sign out. On cancel: return to the app, nothing changes.
+  3. **Only dead-lettered/dismissed rows** (no pending) → no warning. The user already chose to dismiss those; sign out immediately.
 
-- [ ] **Step 4: Tests** — `SyncBadge` renders the right state for each `use-sync-status` value; sign-out triggers the cleanup (mock the IDB clear).
+  Then `await db.close()`, clear the IDB directory (`indexedDB.deleteDatabase("taakify")` or PGlite's equivalent) so a shared device never leaks the prior household's data, and reload to a clean state. The pending-writes warning is the data-loss guard; the IDB clear is the privacy guard.
 
-- [ ] **Step 5: Commit** — `feat(web): sync status badge and sign-out data cleanup`.
+- [ ] **Step 4: Tests** —
+  - `SyncBadge` renders the right variant for each `use-sync-status` state (offline / saving / sync-issue / null-when-synced).
+  - The "Sync issue" list shows dead-lettered operations and Retry re-queues (assert outbox row status flips back to `pending`) while Dismiss marks it `dismissed`.
+  - Sign-out with an empty outbox calls `authClient.signOut()` immediately with no dialog.
+  - Sign-out with pending rows opens the warning dialog; Cancel returns without signing out; Confirm clears IndexedDB and signs out.
+
+- [ ] **Step 5: Commit** — `feat(web): sync status badge, dead-letter surfacing, and sign-out data protection`.
 
 ---
 
-### Task 8: Bootstrap endpoint (optional — decide from Task 1)
+### Task 8: Bootstrap endpoint (cold-start — the "how," not "whether")
 
-**Files:** `apps/api/src/routes/bootstrap.ts`, `apps/api/test/bootstrap.test.ts` — **only if Task 1 found the initial shape catch-up too slow.**
+**Files:** `apps/api/src/routes/bootstrap.ts`, `apps/api/test/bootstrap.test.ts`.
 
-- [ ] If needed: `GET /api/bootstrap?householdId=` through `withUser`, returns the household's full dataset (books + editions + shelves + tags + contacts + loans + reading_statuses) in one JSON payload. RLS enforces scoping. Test: a second household's data is absent.
+This task is **required**, not optional. The cold-start experience — what a user sees the first time they open the app, when PGlite is empty and the shape hasn't streamed in yet — is a make-or-break UX moment. An empty library on first load reads as "my data is gone." Task 1's spike determines *how* to implement cold-start, not *whether*.
 
-- [ ] The web sync layer calls this once on first load to seed PGlite, then lets the shape keep it fresh. If the shape's initial sync is fast enough in dev, **skip this task** and note the decision in the PR.
+- [ ] **Step 1: Decide the approach from the Task 1 spike findings.** Two viable paths:
+  - **(A) Bootstrap endpoint** — `GET /api/bootstrap?householdId=` through `withUser`, returns the household's full dataset (books + editions + shelves + tags + contacts + loans + reading_statuses) in one JSON payload. The web sync layer calls this once on first load to seed PGlite, then the shape keeps it fresh. RLS enforces scoping; test that a second household's data is absent.
+  - **(B) Shape-only with loading state** — if the spike proves Electric's initial shape catch-up is fast enough (sub-500ms with a household-sized dataset in dev), skip the endpoint and rely on Task 4's `synced: false` loading state + progressive fill-in. The loading state (Task 4 Step 3) exists regardless; this path just means the window is short enough that no seeding fetch is needed.
+
+  If the spike is ambiguous, default to **(A)** — a one-round-trip seed fetch is a small cost for guaranteeing the user never sees an empty library on a slow initial sync.
+
+- [ ] **Step 2: Implement** the chosen approach. If (A): build the endpoint, add the test (RLS isolation — second household absent). If (B): document the spike's timing findings in the PR and confirm Task 4's loading state covers the observed window.
+
+- [ ] **Step 3: Commit** — `feat(api): bootstrap endpoint for cold-start` (or document the skip decision in the sync-layer PR).
 
 ---
 
@@ -267,10 +305,12 @@ The write-path heart. Highest-risk piece after loans (spec §9).
 ## Plan 3 exit criteria
 
 - Reads on all book-domain screens hit PGlite; verified by throttling to offline in DevTools and seeing the UI stay responsive.
+- **First load after sign-in shows a loading state (Skeleton), not an empty library** — PGlite is empty until the shape/seed lands; the user never sees a blank "No books yet" during that window.
 - An offline write queues, survives a reload, and flushes + syncs on reconnect.
+- **A dead-lettered write (exhausted retries) is surfaced, never silently dropped** — the user sees an error toast with a Retry action, and the operation persists in the SyncBadge's "Sync issue" list until retried or explicitly dismissed.
 - Two devices see each other's edits stream in near-real-time over the Electric shape.
 - `pnpm test` green across `packages/shared`, `apps/api`, `apps/web`.
 - Web `typecheck` + `build` clean.
 - Integration test proves household-A's synced rows never reach household-B (the SaaS-critical invariant extended to the sync path).
-- Sign-out clears IndexedDB; a shared device never leaks the prior household's data.
-- No `prompt()`/`alert()`/`confirm()`; sync status surfaced via `Badge`/toast only — restyle conventions upheld.
+- **Sign-out warns before data loss** when pending outbox writes exist, then clears IndexedDB; a shared device never leaks the prior household's data.
+- No `prompt()`/`alert()`/`confirm()`; sync status surfaced via `Badge`/toast/Dialog only — restyle conventions upheld.
