@@ -273,4 +273,56 @@ describe("Bookcases", () => {
       expect(getCalls.length).toBe(2);
     });
   });
+
+  it("blocks a second swap while the post-swap refetch is still in flight", async () => {
+    // Both PATCHes resolve immediately, but the refetch GET stays pending
+    // until we release it — this targets the window between "PATCHes
+    // resolved" and "refetch resolved," which is where the in-flight guard
+    // must still be held: releasing it early lets a second click compute a
+    // swap from stale (pre-refetch) local positions and corrupt the order.
+    let resolveGet: () => void = () => {};
+    const pendingGet = new Promise<void>((resolve) => {
+      resolveGet = resolve;
+    });
+    let getCallCount = 0;
+    vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (path.startsWith("/api/bookcases") && method === "GET") {
+        getCallCount++;
+        if (getCallCount > 1) await pendingGet;
+        return { bookcases: [twoShelfBookcase] };
+      }
+      if (path.startsWith("/api/shelves/") && method === "PATCH") {
+        const body = init?.body ? JSON.parse(init.body as string) : {};
+        return { shelf: { ...twoShelfBookcase.shelves[0], ...body } };
+      }
+      throw new Error(`unexpected call: ${method} ${path}`);
+    });
+    renderBookcases();
+    await screen.findByText("Living Room");
+
+    const downButton = screen.getByRole("button", { name: "Move Top Shelf down" });
+    await userEvent.click(downButton);
+
+    // The two swap PATCHes have resolved, but the refetch triggered by the
+    // swap is still pending — the guard must still be held, so the button
+    // stays disabled and a click here is a no-op.
+    await waitFor(() => {
+      const patchCalls = vi
+        .mocked(api)
+        .mock.calls.filter(([p, i]) => p.startsWith("/api/shelves/") && (i as RequestInit)?.method === "PATCH");
+      expect(patchCalls).toHaveLength(2);
+    });
+    expect(downButton).toBeDisabled();
+    await userEvent.click(downButton);
+    await userEvent.click(screen.getByRole("button", { name: "Move Bottom Shelf up" }));
+
+    resolveGet();
+    await waitFor(() => expect(downButton).not.toBeDisabled());
+
+    const patchCalls = vi
+      .mocked(api)
+      .mock.calls.filter(([p, i]) => p.startsWith("/api/shelves/") && (i as RequestInit)?.method === "PATCH");
+    expect(patchCalls).toHaveLength(2);
+  });
 });

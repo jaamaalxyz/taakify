@@ -54,7 +54,7 @@ export function Bookcases() {
 
   function loadBookcases() {
     setLoadError("");
-    api<{ bookcases: Bookcase[] }>(`/api/bookcases?householdId=${household.id}`)
+    return api<{ bookcases: Bookcase[] }>(`/api/bookcases?householdId=${household.id}`)
       .then((data) => setBookcases(data.bookcases))
       .catch((e) => setLoadError(friendlyError(e)));
   }
@@ -140,9 +140,9 @@ export function Bookcases() {
           body: JSON.stringify({ position: a.position }),
         }),
       ]);
-      loadBookcases();
     } catch (err) {
       setReorderError(friendlyError(err));
+    } finally {
       // One of the two PATCHes may have succeeded even though the overall
       // swap failed (e.g. a network blip between the two requests) — the
       // server can be left holding a mismatched position that this
@@ -150,8 +150,14 @@ export function Bookcases() {
       // not just on success, so the UI always converges on whatever the
       // server actually ended up with; the error above still tells the
       // user something went wrong even once the list looks right again.
-      loadBookcases();
-    } finally {
+      //
+      // Await the refetch before releasing the in-flight guard: swap
+      // positions are computed from local state, so if the guard cleared
+      // before the fresh positions landed, a fast second click could
+      // compute a swap from stale (pre-refetch) positions and corrupt the
+      // ordering server-side (no unique constraint on (bookcase_id,
+      // position) catches this).
+      await loadBookcases();
       setReorderingShelfId(null);
     }
   }
