@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
 import { withUser } from "../db/tenant.js";
 import { type SessionUser } from "../middleware/session.js";
+import type { Ownership, WishlistPriority } from "@taakify/shared";
 
 export const books = new Hono<{ Variables: { user: SessionUser } }>();
 
@@ -85,10 +86,10 @@ books.post("/", async (c) => {
     householdId: string;
     editionId?: string;
     edition?: { isbn?: string; title: string; authors?: string; language?: string; cover_url?: string };
-    ownership: "owned" | "borrowed_in" | "wishlist";
+    ownership: Ownership;
     shelf_id?: string;
     do_not_lend?: boolean;
-    wishlist_priority?: "high" | "medium" | "low";
+    wishlist_priority?: WishlistPriority;
     notes?: string;
   }>().catch(() => null);
   if (!body?.householdId || !body?.ownership) return c.json({ error: "householdId and ownership required" }, 400);

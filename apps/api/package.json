@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.14.0",
+    "@taakify/shared": "workspace:*",
     "better-auth": "^1.3.0",
     "dotenv": "^16.4.0",
     "hono": "^4.7.0",

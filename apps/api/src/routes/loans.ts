@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { withUser } from "../db/tenant.js";
 import { requireUser, type SessionUser } from "../middleware/session.js";
 import { dateStr } from "../lib/date.js";
+import { LOAN_DIRECTION_VALUES, type LoanDirection } from "@taakify/shared";
 
 export const loans = new Hono<{ Variables: { user: SessionUser } }>();
 
@@ -68,12 +69,12 @@ loans.post("/", async (c) => {
     bookId?: string;
     contactId?: string;
     contactName?: string;
-    direction?: "lent_out" | "borrowed_in";
+    direction?: LoanDirection;
     dueDate?: string;
   }>().catch(() => null);
 
   if (!body?.bookId) return c.json({ error: "bookId is required" }, 400);
-  if (!body.direction || !["lent_out", "borrowed_in"].includes(body.direction)) {
+  if (!body.direction || !LOAN_DIRECTION_VALUES.includes(body.direction)) {
     return c.json({ error: "direction must be 'lent_out' or 'borrowed_in'" }, 400);
   }
   // Exactly one of contactId/contactName is required. If both are supplied,

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { withUser } from "../db/tenant.js";
 import { type SessionUser } from "../middleware/session.js";
 import { dateStr } from "../lib/date.js";
+import { READING_STATUS_VALUES } from "@taakify/shared";
 
 export const readingStatus = new Hono<{ Variables: { user: SessionUser } }>();
 
@@ -9,7 +10,7 @@ export const readingStatus = new Hono<{ Variables: { user: SessionUser } }>();
 // prefix — this sub-app is mounted there alongside books.ts and tags.ts's
 // bookTags, so a per-sub-app "*" middleware here would run redundantly on
 // every request to any /api/books/* path.
-const VALID_STATUSES = ["unread", "want_to_read", "reading", "finished", "abandoned"];
+const VALID_STATUSES: readonly string[] = READING_STATUS_VALUES;
 
 // PUT /api/books/:bookId/status — upserts the caller's own status row.
 // household_id is never taken from the request body; it's derived server-side
