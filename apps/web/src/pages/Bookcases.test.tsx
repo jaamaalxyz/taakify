@@ -24,6 +24,16 @@ const bookcase = {
   shelves: [{ id: "s1", position: 1, label: "Top Shelf", updated_at: "2026-01-01T00:00:00Z" }],
 };
 
+const twoShelfBookcase = {
+  id: "bc1",
+  name: "Living Room",
+  updated_at: "2026-01-01T00:00:00Z",
+  shelves: [
+    { id: "s1", position: 1, label: "Top Shelf", updated_at: "2026-01-01T00:00:00Z" },
+    { id: "s2", position: 2, label: "Bottom Shelf", updated_at: "2026-01-01T00:00:00Z" },
+  ],
+};
+
 function mockApi({
   bookcases = [bookcase],
   postBookcase,
@@ -155,5 +165,50 @@ describe("Bookcases", () => {
       )
     );
     expect(toast).toHaveBeenCalledWith("Shelf updated");
+  });
+
+  it("clicking the down arrow on the first shelf swaps positions via two PATCH calls", async () => {
+    mockApi({ bookcases: [twoShelfBookcase] });
+    renderBookcases();
+    await screen.findByText("Living Room");
+
+    await userEvent.click(screen.getByRole("button", { name: "Move Top Shelf down" }));
+
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        "/api/shelves/s1",
+        expect.objectContaining({ method: "PATCH", body: JSON.stringify({ position: 2 }) })
+      )
+    );
+    expect(api).toHaveBeenCalledWith(
+      "/api/shelves/s2",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ position: 1 }) })
+    );
+  });
+
+  it("disables the up arrow on the first shelf and the down arrow on the last shelf", async () => {
+    mockApi({ bookcases: [twoShelfBookcase] });
+    renderBookcases();
+    await screen.findByText("Living Room");
+
+    expect(screen.getByRole("button", { name: "Move Top Shelf up" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Move Bottom Shelf down" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Move Top Shelf down" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Move Bottom Shelf up" })).toBeEnabled();
+  });
+
+  it("shows a friendly error when a swap fails", async () => {
+    mockApi({
+      bookcases: [twoShelfBookcase],
+      patchShelf: () => {
+        throw new ApiError("boom", 500);
+      },
+    });
+    renderBookcases();
+    await screen.findByText("Living Room");
+
+    await userEvent.click(screen.getByRole("button", { name: "Move Top Shelf down" }));
+
+    expect(await screen.findByText("Something went wrong. Please try again.")).toBeInTheDocument();
   });
 });
