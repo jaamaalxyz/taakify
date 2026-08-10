@@ -24,6 +24,16 @@ const bookcase = {
   shelves: [{ id: "s1", position: 1, label: "Top Shelf", updated_at: "2026-01-01T00:00:00Z" }],
 };
 
+const twoShelfBookcase = {
+  id: "bc1",
+  name: "Living Room",
+  updated_at: "2026-01-01T00:00:00Z",
+  shelves: [
+    { id: "s1", position: 1, label: "Top Shelf", updated_at: "2026-01-01T00:00:00Z" },
+    { id: "s2", position: 2, label: "Bottom Shelf", updated_at: "2026-01-01T00:00:00Z" },
+  ],
+};
+
 function mockApi({
   bookcases = [bookcase],
   postBookcase,
@@ -155,5 +165,164 @@ describe("Bookcases", () => {
       )
     );
     expect(toast).toHaveBeenCalledWith("Shelf updated");
+  });
+
+  it("clicking the down arrow on the first shelf swaps positions via two PATCH calls", async () => {
+    mockApi({ bookcases: [twoShelfBookcase] });
+    renderBookcases();
+    await screen.findByText("Living Room");
+
+    await userEvent.click(screen.getByRole("button", { name: "Move Top Shelf down" }));
+
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        "/api/shelves/s1",
+        expect.objectContaining({ method: "PATCH", body: JSON.stringify({ position: 2 }) })
+      )
+    );
+    expect(api).toHaveBeenCalledWith(
+      "/api/shelves/s2",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ position: 1 }) })
+    );
+  });
+
+  it("disables the up arrow on the first shelf and the down arrow on the last shelf", async () => {
+    mockApi({ bookcases: [twoShelfBookcase] });
+    renderBookcases();
+    await screen.findByText("Living Room");
+
+    expect(screen.getByRole("button", { name: "Move Top Shelf up" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Move Bottom Shelf down" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Move Top Shelf down" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Move Bottom Shelf up" })).toBeEnabled();
+  });
+
+  it("shows a friendly error when a swap fails", async () => {
+    mockApi({
+      bookcases: [twoShelfBookcase],
+      patchShelf: () => {
+        throw new ApiError("boom", 500);
+      },
+    });
+    renderBookcases();
+    await screen.findByText("Living Room");
+
+    await userEvent.click(screen.getByRole("button", { name: "Move Top Shelf down" }));
+
+    expect(await screen.findByText("Something went wrong. Please try again.")).toBeInTheDocument();
+  });
+
+  it("blocks a second swap while the first is still in flight", async () => {
+    let resolvePatch: () => void = () => {};
+    const pending = new Promise<void>((resolve) => {
+      resolvePatch = resolve;
+    });
+    vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (path.startsWith("/api/bookcases") && method === "GET") return { bookcases: [twoShelfBookcase] };
+      if (path.startsWith("/api/shelves/") && method === "PATCH") {
+        await pending;
+        const body = init?.body ? JSON.parse(init.body as string) : {};
+        return { shelf: { ...twoShelfBookcase.shelves[0], ...body } };
+      }
+      throw new Error(`unexpected call: ${method} ${path}`);
+    });
+    renderBookcases();
+    await screen.findByText("Living Room");
+
+    const downButton = screen.getByRole("button", { name: "Move Top Shelf down" });
+    await userEvent.click(downButton);
+    // The first swap's PATCHes haven't resolved yet, so every reorder
+    // button (including this one) should now be disabled — a second click
+    // here is a no-op since a disabled native button doesn't fire onClick.
+    expect(downButton).toBeDisabled();
+    await userEvent.click(downButton);
+    await userEvent.click(screen.getByRole("button", { name: "Move Bottom Shelf up" }));
+
+    resolvePatch();
+    await waitFor(() => expect(downButton).not.toBeDisabled());
+
+    const patchCalls = vi
+      .mocked(api)
+      .mock.calls.filter(([p, i]) => p.startsWith("/api/shelves/") && (i as RequestInit)?.method === "PATCH");
+    expect(patchCalls).toHaveLength(2);
+  });
+
+  it("refetches after a partial swap failure (one PATCH succeeds, one rejects)", async () => {
+    mockApi({
+      bookcases: [twoShelfBookcase],
+      patchShelf: (body) => {
+        if (body.position === 2) throw new ApiError("boom", 500);
+        return { shelf: { ...twoShelfBookcase.shelves[1], ...body } };
+      },
+    });
+    renderBookcases();
+    await screen.findByText("Living Room");
+
+    await userEvent.click(screen.getByRole("button", { name: "Move Top Shelf down" }));
+
+    expect(await screen.findByText("Something went wrong. Please try again.")).toBeInTheDocument();
+
+    // One initial GET on mount, plus a second GET refetch after the failed
+    // swap — the UI re-syncs with the server even though the swap errored,
+    // since one of the two PATCHes may have actually succeeded server-side.
+    await waitFor(() => {
+      const getCalls = vi
+        .mocked(api)
+        .mock.calls.filter(([p, i]) => p.startsWith("/api/bookcases") && (i as RequestInit | undefined)?.method === undefined);
+      expect(getCalls.length).toBe(2);
+    });
+  });
+
+  it("blocks a second swap while the post-swap refetch is still in flight", async () => {
+    // Both PATCHes resolve immediately, but the refetch GET stays pending
+    // until we release it — this targets the window between "PATCHes
+    // resolved" and "refetch resolved," which is where the in-flight guard
+    // must still be held: releasing it early lets a second click compute a
+    // swap from stale (pre-refetch) local positions and corrupt the order.
+    let resolveGet: () => void = () => {};
+    const pendingGet = new Promise<void>((resolve) => {
+      resolveGet = resolve;
+    });
+    let getCallCount = 0;
+    vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (path.startsWith("/api/bookcases") && method === "GET") {
+        getCallCount++;
+        if (getCallCount > 1) await pendingGet;
+        return { bookcases: [twoShelfBookcase] };
+      }
+      if (path.startsWith("/api/shelves/") && method === "PATCH") {
+        const body = init?.body ? JSON.parse(init.body as string) : {};
+        return { shelf: { ...twoShelfBookcase.shelves[0], ...body } };
+      }
+      throw new Error(`unexpected call: ${method} ${path}`);
+    });
+    renderBookcases();
+    await screen.findByText("Living Room");
+
+    const downButton = screen.getByRole("button", { name: "Move Top Shelf down" });
+    await userEvent.click(downButton);
+
+    // The two swap PATCHes have resolved, but the refetch triggered by the
+    // swap is still pending — the guard must still be held, so the button
+    // stays disabled and a click here is a no-op.
+    await waitFor(() => {
+      const patchCalls = vi
+        .mocked(api)
+        .mock.calls.filter(([p, i]) => p.startsWith("/api/shelves/") && (i as RequestInit)?.method === "PATCH");
+      expect(patchCalls).toHaveLength(2);
+    });
+    expect(downButton).toBeDisabled();
+    await userEvent.click(downButton);
+    await userEvent.click(screen.getByRole("button", { name: "Move Bottom Shelf up" }));
+
+    resolveGet();
+    await waitFor(() => expect(downButton).not.toBeDisabled());
+
+    const patchCalls = vi
+      .mocked(api)
+      .mock.calls.filter(([p, i]) => p.startsWith("/api/shelves/") && (i as RequestInit)?.method === "PATCH");
+    expect(patchCalls).toHaveLength(2);
   });
 });

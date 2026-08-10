@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Library as LibraryIcon } from "lucide-react";
+import { Library as LibraryIcon, ArrowUp, ArrowDown } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
 import { api } from "../lib/api.js";
@@ -47,9 +47,14 @@ export function Bookcases() {
   const [savingEditShelf, setSavingEditShelf] = useState(false);
   const [editShelfError, setEditShelfError] = useState("");
 
+  // Shelf reorder (up/down arrows) — tracks the shelf id currently being
+  // swapped so its buttons (and its neighbor's) disable during the PATCHes.
+  const [reorderingShelfId, setReorderingShelfId] = useState<string | null>(null);
+  const [reorderError, setReorderError] = useState("");
+
   function loadBookcases() {
     setLoadError("");
-    api<{ bookcases: Bookcase[] }>(`/api/bookcases?householdId=${household.id}`)
+    return api<{ bookcases: Bookcase[] }>(`/api/bookcases?householdId=${household.id}`)
       .then((data) => setBookcases(data.bookcases))
       .catch((e) => setLoadError(friendlyError(e)));
   }
@@ -118,6 +123,42 @@ export function Bookcases() {
       setEditShelfError(friendlyError(err));
     } finally {
       setSavingEditShelf(false);
+    }
+  }
+
+  async function handleSwapShelves(a: Shelf, b: Shelf) {
+    setReorderError("");
+    setReorderingShelfId(a.id);
+    try {
+      await Promise.all([
+        api(`/api/shelves/${a.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ position: b.position }),
+        }),
+        api(`/api/shelves/${b.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ position: a.position }),
+        }),
+      ]);
+    } catch (err) {
+      setReorderError(friendlyError(err));
+    } finally {
+      // One of the two PATCHes may have succeeded even though the overall
+      // swap failed (e.g. a network blip between the two requests) — the
+      // server can be left holding a mismatched position that this
+      // component's stale local state wouldn't reflect. Refetch here too,
+      // not just on success, so the UI always converges on whatever the
+      // server actually ended up with; the error above still tells the
+      // user something went wrong even once the list looks right again.
+      //
+      // Await the refetch before releasing the in-flight guard: swap
+      // positions are computed from local state, so if the guard cleared
+      // before the fresh positions landed, a fast second click could
+      // compute a swap from stale (pre-refetch) positions and corrupt the
+      // ordering server-side (no unique constraint on (bookcase_id,
+      // position) catches this).
+      await loadBookcases();
+      setReorderingShelfId(null);
     }
   }
 
@@ -196,22 +237,45 @@ export function Bookcases() {
                 )}
                 {bc.shelves.length > 0 && (
                   <ul className="flex flex-wrap gap-2">
-                    {bc.shelves.map((shelf) => (
-                      <li key={shelf.id}>
-                        <Badge
-                          variant="outline"
-                          role="button"
-                          tabIndex={0}
-                          className="cursor-pointer gap-1"
-                          onClick={() => {
-                            setEditShelf(shelf);
-                            setEditShelfLabel(shelf.label ?? "");
-                          }}
-                        >
-                          {shelf.label || `Shelf ${shelf.position}`}
-                        </Badge>
-                      </li>
-                    ))}
+                    {bc.shelves.map((shelf, index) => {
+                      const shelfAbove = index > 0 ? bc.shelves[index - 1] : null;
+                      const shelfBelow = index < bc.shelves.length - 1 ? bc.shelves[index + 1] : null;
+                      const swapping = reorderingShelfId !== null;
+                      return (
+                        <li key={shelf.id} className="flex items-center gap-1">
+                          <Badge
+                            variant="outline"
+                            role="button"
+                            tabIndex={0}
+                            className="cursor-pointer gap-1"
+                            onClick={() => {
+                              setEditShelf(shelf);
+                              setEditShelfLabel(shelf.label ?? "");
+                            }}
+                          >
+                            {shelf.label || `Shelf ${shelf.position}`}
+                          </Badge>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label={`Move ${shelf.label || `Shelf ${shelf.position}`} up`}
+                            disabled={!shelfAbove || swapping}
+                            onClick={() => shelfAbove && handleSwapShelves(shelf, shelfAbove)}
+                          >
+                            <ArrowUp />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label={`Move ${shelf.label || `Shelf ${shelf.position}`} down`}
+                            disabled={!shelfBelow || swapping}
+                            onClick={() => shelfBelow && handleSwapShelves(shelf, shelfBelow)}
+                          >
+                            <ArrowDown />
+                          </Button>
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </CardContent>
@@ -220,13 +284,11 @@ export function Bookcases() {
         </div>
       )}
 
-      {/*
-        Reordering scope: shelves carry a server-computed `position` and
-        PATCH /api/shelves/:id accepts a `position` field, but there's no
-        drag-and-drop UI here — out of scope for this task per the brief
-        ("reorder/edit" is satisfied by label editing; visual reordering is
-        left for a future pass since the server already supports it).
-      */}
+      {reorderError && (
+        <Alert variant="destructive">
+          <AlertDescription>{reorderError}</AlertDescription>
+        </Alert>
+      )}
 
       <Dialog open={addShelfFor !== null} onOpenChange={(open) => !open && setAddShelfFor(null)}>
         <DialogContent>
