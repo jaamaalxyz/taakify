@@ -111,6 +111,7 @@ function mockApi({
   contacts = [],
   postLoan,
   patchLoan,
+  bookOverride,
 }: {
   statusList?: typeof statuses;
   putStatus?: (body: Record<string, unknown>) => unknown;
@@ -126,6 +127,7 @@ function mockApi({
   contacts?: { id: string; name: string }[];
   postLoan?: (body: Record<string, unknown>) => unknown;
   patchLoan?: (body: Record<string, unknown>) => unknown;
+  bookOverride?: Partial<typeof book>;
 } = {}) {
   // Tracks tag id -> tag across both /api/tags (household tags) and any
   // freshly created tags, so /api/books/b1/tags can echo back real names
@@ -136,7 +138,8 @@ function mockApi({
 
   vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
-    if (path === "/api/books/b1" && method === "GET") return { book };
+    const book1 = bookOverride ? { ...book, ...bookOverride } : book;
+    if (path === "/api/books/b1" && method === "GET") return { book: book1 };
     if (path === "/api/books/b1/status" && method === "GET") return { statuses: statusList };
     if (path === "/api/books/b1/status" && method === "PUT") {
       const body = init?.body ? JSON.parse(init.body as string) : {};
@@ -167,7 +170,7 @@ function mockApi({
     }
     if (path === "/api/books/b1" && method === "PATCH") {
       const body = init?.body ? JSON.parse(init.body as string) : {};
-      return patchBook ? patchBook(body) : { book: { ...book, ...body } };
+      return patchBook ? patchBook(body) : { book: { ...book1, ...body } };
     }
     if (path === "/api/books/b1" && method === "DELETE") return del ? del() : { ok: true };
     if (path.startsWith("/api/loans") && method === "GET") return loans;
@@ -544,5 +547,45 @@ describe("BookDetail", () => {
     );
     expect(toast).toHaveBeenCalledWith("Marked as returned");
     await waitFor(() => expect(screen.queryByText(/Lent out · Alex/)).not.toBeInTheDocument());
+  });
+
+  it("lending a do-not-lend book shows a warning and hides the form until acknowledged", async () => {
+    mockApi({ bookOverride: { do_not_lend: true } });
+    renderBookDetail();
+    await screen.findByText("Dune");
+
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    await userEvent.click(await screen.findByText("Lend out"));
+
+    // The warning is shown and the form fields are absent until "Lend anyway"
+    // is clicked — the user can't accidentally submit a do-not-lend loan.
+    expect(screen.getByText(/marked “do not lend.” Lend it anyway\?/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Direction")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Contact")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Record loan" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Lend anyway" })).toBeInTheDocument();
+  });
+
+  it("confirming the do-not-lend warning reveals the form and allows the loan", async () => {
+    mockApi({ bookOverride: { do_not_lend: true } });
+    renderBookDetail();
+    await screen.findByText("Dune");
+
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    await userEvent.click(await screen.findByText("Lend out"));
+
+    await userEvent.click(screen.getByRole("button", { name: "Lend anyway" }));
+
+    // The form is now visible and behaves exactly like the normal lend flow.
+    await userEvent.type(await screen.findByLabelText("New contact name"), "Alex");
+    await userEvent.click(screen.getByRole("button", { name: "Record loan" }));
+
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        "/api/loans",
+        expect.objectContaining({ method: "POST" })
+      )
+    );
+    expect(toast).toHaveBeenCalledWith("Loan recorded");
   });
 });

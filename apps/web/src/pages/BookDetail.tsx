@@ -177,6 +177,9 @@ export function BookDetail() {
   const [lendDueDate, setLendDueDate] = useState("");
   const [savingLoan, setSavingLoan] = useState(false);
   const [lendError, setLendError] = useState("");
+  // A do-not-lend book can still be lent, but the user must acknowledge the
+  // warning first — the dialog opens on the warning, then reveals the form.
+  const [doNotLendConfirmed, setDoNotLendConfirmed] = useState(false);
 
   function loadActiveLoan() {
     if (!bookId) return;
@@ -401,6 +404,10 @@ export function BookDetail() {
   async function handleCreateLoan(e: FormEvent) {
     e.preventDefault();
     if (!bookId) return;
+    // Defense in depth: the form is only rendered once the warning is
+    // acknowledged (see the dialog below), but keep the guard so a stale
+    // doNotLendConfirmed can never let a do-not-lend loan slip through.
+    if (book?.do_not_lend && !doNotLendConfirmed) return;
     if (lendContactSelection === NEW_CONTACT && !lendNewContactName.trim()) {
       setLendError("Choose a contact or enter a new contact name.");
       return;
@@ -424,6 +431,7 @@ export function BookDetail() {
       setLendNewContactName("");
       setLendDirection("lent_out");
       setLendDueDate("");
+      setDoNotLendConfirmed(false);
       loadActiveLoan();
       // Picks up a brand-new "+ New contact" contact so it's selectable in
       // this dialog without a full page reload.
@@ -802,13 +810,34 @@ export function BookDetail() {
         open={lendOpen}
         onOpenChange={(open) => {
           setLendOpen(open);
-          if (!open) setLendError("");
+          if (!open) {
+            setLendError("");
+            setDoNotLendConfirmed(false);
+          }
         }}
       >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Lend out</DialogTitle>
           </DialogHeader>
+          {book.do_not_lend && !doNotLendConfirmed ? (
+            // Two-phase dialog: a do-not-lend book must be acknowledged
+            // before the lend form is revealed. The user can still override
+            // — this is a warning, not a hard block.
+            <div className="space-y-3">
+              <Alert variant="destructive">
+                <AlertDescription>
+                  This book is marked “do not lend.” Lend it anyway?
+                </AlertDescription>
+              </Alert>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setLendOpen(false)}>
+                  Cancel
+                </Button>
+                <Button onClick={() => setDoNotLendConfirmed(true)}>Lend anyway</Button>
+              </DialogFooter>
+            </div>
+          ) : (
           <form onSubmit={handleCreateLoan} className="space-y-3">
             {contactsLoadError && (
               <p className="text-xs text-muted-foreground">
@@ -873,6 +902,7 @@ export function BookDetail() {
               </Button>
             </DialogFooter>
           </form>
+          )}
         </DialogContent>
       </Dialog>
 
