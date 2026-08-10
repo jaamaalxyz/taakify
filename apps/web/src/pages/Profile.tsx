@@ -30,7 +30,7 @@ type Book = {
 };
 
 export function Profile() {
-  const { user, household } = useHousehold();
+  const { user, household, members } = useHousehold();
 
   const [books, setBooks] = useState<Book[] | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -168,6 +168,22 @@ export function Profile() {
 
       <section className="space-y-2">
         <h2 className="text-sm font-semibold">Household</h2>
+        {members === null && (
+          <div className="space-y-2">
+            <Skeleton className="h-6 w-full" />
+            <Skeleton className="h-6 w-full" />
+          </div>
+        )}
+        {members !== null && members.length > 0 && (
+          <ul className="space-y-1">
+            {members.map((m) => (
+              <li key={m.id} className="flex items-center justify-between gap-2 rounded-lg border p-2">
+                <span className="text-sm font-medium">{m.name}</span>
+                <Badge variant="outline">{m.role}</Badge>
+              </li>
+            ))}
+          </ul>
+        )}
         <Dialog
           open={inviteOpen}
           onOpenChange={(open) => {

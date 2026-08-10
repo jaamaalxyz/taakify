@@ -94,6 +94,8 @@ const bookcase = {
   shelves: [{ id: "s1", position: 0, label: "Top Shelf", updated_at: "2026-01-01T00:00:00Z" }],
 };
 
+const noLoans = { loans: [] as unknown[] };
+
 function mockApi({
   statusList = statuses,
   putStatus,
@@ -105,6 +107,10 @@ function mockApi({
   delTag,
   bookcases = [bookcase],
   patchBook,
+  loans = noLoans,
+  contacts = [],
+  postLoan,
+  patchLoan,
 }: {
   statusList?: typeof statuses;
   putStatus?: (body: Record<string, unknown>) => unknown;
@@ -116,6 +122,10 @@ function mockApi({
   delTag?: () => unknown;
   bookcases?: (typeof bookcase)[];
   patchBook?: (body: Record<string, unknown>) => unknown;
+  loans?: { loans: unknown[] };
+  contacts?: { id: string; name: string }[];
+  postLoan?: (body: Record<string, unknown>) => unknown;
+  patchLoan?: (body: Record<string, unknown>) => unknown;
 } = {}) {
   // Tracks tag id -> tag across both /api/tags (household tags) and any
   // freshly created tags, so /api/books/b1/tags can echo back real names
@@ -160,6 +170,16 @@ function mockApi({
       return patchBook ? patchBook(body) : { book: { ...book, ...body } };
     }
     if (path === "/api/books/b1" && method === "DELETE") return del ? del() : { ok: true };
+    if (path.startsWith("/api/loans") && method === "GET") return loans;
+    if (path.startsWith("/api/contacts") && method === "GET") return { contacts };
+    if (path === "/api/loans" && method === "POST") {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      return postLoan ? postLoan(body) : { loan: { id: "l1", ...body } };
+    }
+    if (path.startsWith("/api/loans/") && method === "PATCH") {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      return patchLoan ? patchLoan(body) : { loan: { id: "l1", ...body } };
+    }
     throw new Error(`unexpected call: ${method} ${path}`);
   });
 }
@@ -360,5 +380,169 @@ describe("BookDetail", () => {
       expect(api).toHaveBeenCalledWith("/api/books/b1", expect.objectContaining({ method: "DELETE" }))
     );
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/library"));
+  });
+
+  it("shows the active loan status with contact, due date, and overdue badge", async () => {
+    mockApi({
+      loans: {
+        loans: [
+          {
+            id: "l1",
+            direction: "lent_out",
+            due_date: "2026-01-01",
+            returned_date: null,
+            overdue: true,
+            contact: { id: "c1", name: "Alex" },
+          },
+        ],
+      },
+    });
+    renderBookDetail();
+    await screen.findByText("Dune");
+
+    expect(await screen.findByText(/Lent out · Alex · due 2026-01-01/)).toBeInTheDocument();
+    expect(screen.getByText("Overdue")).toBeInTheDocument();
+  });
+
+  it("no active loan: no loan banner, and 'Lend out' menu item is present", async () => {
+    mockApi();
+    renderBookDetail();
+    await screen.findByText("Dune");
+
+    expect(screen.queryByText("Overdue")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByText("Lend out")).toBeInTheDocument();
+  });
+
+  it("with an active loan: 'Lend out' menu item is absent", async () => {
+    mockApi({
+      loans: {
+        loans: [
+          {
+            id: "l1",
+            direction: "lent_out",
+            due_date: null,
+            returned_date: null,
+            overdue: false,
+            contact: { id: "c1", name: "Alex" },
+          },
+        ],
+      },
+    });
+    renderBookDetail();
+    await screen.findByText("Dune");
+    await screen.findByText(/Lent out · Alex/);
+
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(screen.queryByText("Lend out")).not.toBeInTheDocument();
+  });
+
+  it("submitting the lend dialog calls POST /api/loans with bookId and no book picker", async () => {
+    mockApi();
+    renderBookDetail();
+    await screen.findByText("Dune");
+
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    await userEvent.click(await screen.findByText("Lend out"));
+
+    expect(screen.queryByLabelText("Book")).not.toBeInTheDocument();
+    await userEvent.type(await screen.findByLabelText("New contact name"), "Alex");
+    await userEvent.click(screen.getByRole("button", { name: "Record loan" }));
+
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        "/api/loans",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            bookId: "b1",
+            direction: "lent_out",
+            dueDate: undefined,
+            contactId: undefined,
+            contactName: "Alex",
+          }),
+        })
+      )
+    );
+    expect(toast).toHaveBeenCalledWith("Loan recorded");
+  });
+
+  it("contacts are only fetched when the lend dialog opens, and a newly-created contact is selectable without a reload", async () => {
+    mockApi({ contacts: [{ id: "c1", name: "Alex" }] });
+    renderBookDetail();
+    await screen.findByText("Dune");
+
+    // Contacts must not be fetched just from mounting the page.
+    expect(
+      vi.mocked(api).mock.calls.some(([path]) => String(path).startsWith("/api/contacts"))
+    ).toBe(false);
+
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    await userEvent.click(await screen.findByText("Lend out"));
+
+    // Choosing "Lend out" triggers the (now lazy) contacts fetch.
+    await waitFor(() => expect(api).toHaveBeenCalledWith("/api/contacts?householdId=h1"));
+
+    // Recording a loan via "+ New contact" creates "Sam", then re-fetches
+    // contacts so it appears in the picker without a full page reload.
+    await userEvent.type(await screen.findByLabelText("New contact name"), "Sam");
+    await userEvent.click(screen.getByRole("button", { name: "Record loan" }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Loan recorded"));
+
+    await waitFor(() => {
+      const calls = vi.mocked(api).mock.calls.filter(([path]) => path === "/api/contacts?householdId=h1");
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it("clicking 'Mark returned' calls PATCH /api/loans/:id and the active-loan banner disappears", async () => {
+    let returned = false;
+    vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (path === "/api/books/b1" && method === "GET") return { book };
+      if (path === "/api/books/b1/status" && method === "GET") return { statuses };
+      if (path.startsWith("/api/bookcases")) return { bookcases: [bookcase] };
+      if (path === "/api/books/b1/tags" && method === "GET") return { tags: [] };
+      if (path.startsWith("/api/tags") && method === "GET") return { tags: [] };
+      if (path.startsWith("/api/loans") && method === "GET") {
+        return returned
+          ? { loans: [] }
+          : {
+              loans: [
+                {
+                  id: "l1",
+                  direction: "lent_out",
+                  due_date: null,
+                  returned_date: null,
+                  overdue: false,
+                  contact: { id: "c1", name: "Alex" },
+                },
+              ],
+            };
+      }
+      if (path === "/api/loans/l1" && method === "PATCH") {
+        const body = init?.body ? JSON.parse(init.body as string) : {};
+        returned = true;
+        return { loan: { id: "l1", returned_date: body.returned_date } };
+      }
+      throw new Error(`unexpected call: ${method} ${path}`);
+    });
+    renderBookDetail();
+    await screen.findByText("Dune");
+    await screen.findByText(/Lent out · Alex/);
+
+    await userEvent.click(screen.getByRole("button", { name: "Mark returned" }));
+
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        "/api/loans/l1",
+        expect.objectContaining({
+          method: "PATCH",
+          body: expect.stringContaining('"returned_date"'),
+        })
+      )
+    );
+    expect(toast).toHaveBeenCalledWith("Marked as returned");
+    await waitFor(() => expect(screen.queryByText(/Lent out · Alex/)).not.toBeInTheDocument());
   });
 });
