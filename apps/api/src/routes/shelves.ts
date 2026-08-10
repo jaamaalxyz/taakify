@@ -119,6 +119,18 @@ shelves.patch("/:id", async (c) => {
   }
   if (!sets.length) return c.json({ error: "nothing to update" }, 400);
 
+  // position is an `int` column — without this guard a non-numeric or
+  // non-integer value (e.g. "abc", 1.5) reaches Postgres and surfaces as an
+  // opaque 500 (invalid input syntax / 22P02). Validate it here so bad input
+  // returns a clean 400, mirroring the inline enum checks in loans.ts and
+  // reading-status.ts rather than introducing a validation library.
+  if ("position" in body) {
+    const p = (body as { position: unknown }).position;
+    if (typeof p !== "number" || !Number.isInteger(p) || p < 1) {
+      return c.json({ error: "position must be a positive integer" }, 400);
+    }
+  }
+
   const { rows } = await withUser(user.id, (client) =>
     client.query(
       `UPDATE shelf SET ${sets.join(", ")}, updated_at = now()
