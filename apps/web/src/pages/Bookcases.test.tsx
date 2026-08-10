@@ -211,4 +211,66 @@ describe("Bookcases", () => {
 
     expect(await screen.findByText("Something went wrong. Please try again.")).toBeInTheDocument();
   });
+
+  it("blocks a second swap while the first is still in flight", async () => {
+    let resolvePatch: () => void = () => {};
+    const pending = new Promise<void>((resolve) => {
+      resolvePatch = resolve;
+    });
+    vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (path.startsWith("/api/bookcases") && method === "GET") return { bookcases: [twoShelfBookcase] };
+      if (path.startsWith("/api/shelves/") && method === "PATCH") {
+        await pending;
+        const body = init?.body ? JSON.parse(init.body as string) : {};
+        return { shelf: { ...twoShelfBookcase.shelves[0], ...body } };
+      }
+      throw new Error(`unexpected call: ${method} ${path}`);
+    });
+    renderBookcases();
+    await screen.findByText("Living Room");
+
+    const downButton = screen.getByRole("button", { name: "Move Top Shelf down" });
+    await userEvent.click(downButton);
+    // The first swap's PATCHes haven't resolved yet, so every reorder
+    // button (including this one) should now be disabled — a second click
+    // here is a no-op since a disabled native button doesn't fire onClick.
+    expect(downButton).toBeDisabled();
+    await userEvent.click(downButton);
+    await userEvent.click(screen.getByRole("button", { name: "Move Bottom Shelf up" }));
+
+    resolvePatch();
+    await waitFor(() => expect(downButton).not.toBeDisabled());
+
+    const patchCalls = vi
+      .mocked(api)
+      .mock.calls.filter(([p, i]) => p.startsWith("/api/shelves/") && (i as RequestInit)?.method === "PATCH");
+    expect(patchCalls).toHaveLength(2);
+  });
+
+  it("refetches after a partial swap failure (one PATCH succeeds, one rejects)", async () => {
+    mockApi({
+      bookcases: [twoShelfBookcase],
+      patchShelf: (body) => {
+        if (body.position === 2) throw new ApiError("boom", 500);
+        return { shelf: { ...twoShelfBookcase.shelves[1], ...body } };
+      },
+    });
+    renderBookcases();
+    await screen.findByText("Living Room");
+
+    await userEvent.click(screen.getByRole("button", { name: "Move Top Shelf down" }));
+
+    expect(await screen.findByText("Something went wrong. Please try again.")).toBeInTheDocument();
+
+    // One initial GET on mount, plus a second GET refetch after the failed
+    // swap — the UI re-syncs with the server even though the swap errored,
+    // since one of the two PATCHes may have actually succeeded server-side.
+    await waitFor(() => {
+      const getCalls = vi
+        .mocked(api)
+        .mock.calls.filter(([p, i]) => p.startsWith("/api/bookcases") && (i as RequestInit | undefined)?.method === undefined);
+      expect(getCalls.length).toBe(2);
+    });
+  });
 });

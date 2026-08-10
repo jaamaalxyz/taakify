@@ -143,6 +143,14 @@ export function Bookcases() {
       loadBookcases();
     } catch (err) {
       setReorderError(friendlyError(err));
+      // One of the two PATCHes may have succeeded even though the overall
+      // swap failed (e.g. a network blip between the two requests) — the
+      // server can be left holding a mismatched position that this
+      // component's stale local state wouldn't reflect. Refetch here too,
+      // not just on success, so the UI always converges on whatever the
+      // server actually ended up with; the error above still tells the
+      // user something went wrong even once the list looks right again.
+      loadBookcases();
     } finally {
       setReorderingShelfId(null);
     }
@@ -243,23 +251,21 @@ export function Bookcases() {
                           </Badge>
                           <Button
                             variant="ghost"
-                            size="icon"
-                            className="h-6 w-6"
+                            size="icon-xs"
                             aria-label={`Move ${shelf.label || `Shelf ${shelf.position}`} up`}
                             disabled={!shelfAbove || swapping}
                             onClick={() => shelfAbove && handleSwapShelves(shelf, shelfAbove)}
                           >
-                            <ArrowUp className="h-3 w-3" />
+                            <ArrowUp />
                           </Button>
                           <Button
                             variant="ghost"
-                            size="icon"
-                            className="h-6 w-6"
+                            size="icon-xs"
                             aria-label={`Move ${shelf.label || `Shelf ${shelf.position}`} down`}
                             disabled={!shelfBelow || swapping}
                             onClick={() => shelfBelow && handleSwapShelves(shelf, shelfBelow)}
                           >
-                            <ArrowDown className="h-3 w-3" />
+                            <ArrowDown />
                           </Button>
                         </li>
                       );
