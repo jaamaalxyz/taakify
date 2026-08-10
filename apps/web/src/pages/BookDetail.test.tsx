@@ -466,4 +466,83 @@ describe("BookDetail", () => {
     );
     expect(toast).toHaveBeenCalledWith("Loan recorded");
   });
+
+  it("contacts are only fetched when the lend dialog opens, and a newly-created contact is selectable without a reload", async () => {
+    mockApi({ contacts: [{ id: "c1", name: "Alex" }] });
+    renderBookDetail();
+    await screen.findByText("Dune");
+
+    // Contacts must not be fetched just from mounting the page.
+    expect(
+      vi.mocked(api).mock.calls.some(([path]) => String(path).startsWith("/api/contacts"))
+    ).toBe(false);
+
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    await userEvent.click(await screen.findByText("Lend out"));
+
+    // Choosing "Lend out" triggers the (now lazy) contacts fetch.
+    await waitFor(() => expect(api).toHaveBeenCalledWith("/api/contacts?householdId=h1"));
+
+    // Recording a loan via "+ New contact" creates "Sam", then re-fetches
+    // contacts so it appears in the picker without a full page reload.
+    await userEvent.type(await screen.findByLabelText("New contact name"), "Sam");
+    await userEvent.click(screen.getByRole("button", { name: "Record loan" }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Loan recorded"));
+
+    await waitFor(() => {
+      const calls = vi.mocked(api).mock.calls.filter(([path]) => path === "/api/contacts?householdId=h1");
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it("clicking 'Mark returned' calls PATCH /api/loans/:id and the active-loan banner disappears", async () => {
+    let returned = false;
+    vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (path === "/api/books/b1" && method === "GET") return { book };
+      if (path === "/api/books/b1/status" && method === "GET") return { statuses };
+      if (path.startsWith("/api/bookcases")) return { bookcases: [bookcase] };
+      if (path === "/api/books/b1/tags" && method === "GET") return { tags: [] };
+      if (path.startsWith("/api/tags") && method === "GET") return { tags: [] };
+      if (path.startsWith("/api/loans") && method === "GET") {
+        return returned
+          ? { loans: [] }
+          : {
+              loans: [
+                {
+                  id: "l1",
+                  direction: "lent_out",
+                  due_date: null,
+                  returned_date: null,
+                  overdue: false,
+                  contact: { id: "c1", name: "Alex" },
+                },
+              ],
+            };
+      }
+      if (path === "/api/loans/l1" && method === "PATCH") {
+        const body = init?.body ? JSON.parse(init.body as string) : {};
+        returned = true;
+        return { loan: { id: "l1", returned_date: body.returned_date } };
+      }
+      throw new Error(`unexpected call: ${method} ${path}`);
+    });
+    renderBookDetail();
+    await screen.findByText("Dune");
+    await screen.findByText(/Lent out · Alex/);
+
+    await userEvent.click(screen.getByRole("button", { name: "Mark returned" }));
+
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        "/api/loans/l1",
+        expect.objectContaining({
+          method: "PATCH",
+          body: expect.stringContaining('"returned_date"'),
+        })
+      )
+    );
+    expect(toast).toHaveBeenCalledWith("Marked as returned");
+    await waitFor(() => expect(screen.queryByText(/Lent out · Alex/)).not.toBeInTheDocument());
+  });
 });

@@ -225,6 +225,28 @@ describe("loans", () => {
     expect(list.loans[0].book.id).toBe(bookA.id);
   });
 
+  it("RLS: bookId filter can't be used to peek at another household's loan via a foreign bookId", async () => {
+    // householdId is always RLS-scoped to the caller's own household — this
+    // proves the bookId param can't be paired with a foreign householdId
+    // (b's own household) plus a's book id to leak a's loan data. The route
+    // enforces `l.household_id = $1` unconditionally, but this test locks
+    // that guarantee in so a future refactor of the where-array builder
+    // can't silently regress it.
+    const a = await signUp(app);
+    const houseA = await createHousehold(a.cookie, "A");
+    const bookA = await addBook(a.cookie, houseA.id, "Secret Book");
+    await createLoan(a.cookie, { bookId: bookA.id, contactName: "Hank", direction: "lent_out" });
+
+    const b = await signUp(app);
+    const houseB = await createHousehold(b.cookie, "B");
+    const list = await (
+      await app.request(`/api/loans?householdId=${houseB.id}&bookId=${bookA.id}`, {
+        headers: { cookie: b.cookie },
+      })
+    ).json();
+    expect(list.loans).toHaveLength(0);
+  });
+
   it("RLS: household B never sees household A's loans", async () => {
     const a = await signUp(app);
     const houseA = await createHousehold(a.cookie, "A");

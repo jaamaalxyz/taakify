@@ -169,6 +169,7 @@ export function BookDetail() {
   const [returningLoan, setReturningLoan] = useState(false);
   const [returnError, setReturnError] = useState("");
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [contactsLoadError, setContactsLoadError] = useState("");
   const [lendOpen, setLendOpen] = useState(false);
   const [lendContactSelection, setLendContactSelection] = useState<string>(NEW_CONTACT);
   const [lendNewContactName, setLendNewContactName] = useState("");
@@ -220,6 +221,23 @@ export function BookDetail() {
       .catch((e) => setTagError(friendlyError(e)));
   }
 
+  // Only loaded lazily when the "Lend out" menu item is chosen (see its
+  // onSelect below, which opens this controlled dialog directly rather than
+  // through Radix's own open/close transitions — onOpenChange doesn't fire
+  // for that, so the fetch has to be triggered there) — unlike
+  // bookcases/tags above, which every page view needs for always-visible
+  // UI, contacts are only used inside this dialog, which most book-detail
+  // visits never open.
+  function loadContacts() {
+    setContactsLoadError("");
+    api<{ contacts: Contact[] }>(`/api/contacts?householdId=${household.id}`)
+      .then((data) => setContacts(data.contacts))
+      .catch((e) => {
+        setContacts([]);
+        setContactsLoadError(friendlyError(e));
+      });
+  }
+
   useEffect(() => {
     loadBook();
     loadStatuses();
@@ -245,12 +263,6 @@ export function BookDetail() {
     api<{ tags: Tag[] }>(`/api/tags?householdId=${household.id}`)
       .then((data) => setHouseholdTags(data.tags))
       .catch(() => setHouseholdTags([]));
-    // Silent failure here (empty picker) mirrors Loans.tsx's contactsLoadError
-    // handling — not fatal to the page, just means the "+ New contact" path
-    // is the only option in the lend dialog until reopened.
-    api<{ contacts: Contact[] }>(`/api/contacts?householdId=${household.id}`)
-      .then((data) => setContacts(data.contacts))
-      .catch(() => setContacts([]));
   }, [household.id]);
 
   async function handleStatusSubmit(e: FormEvent) {
@@ -413,6 +425,9 @@ export function BookDetail() {
       setLendDirection("lent_out");
       setLendDueDate("");
       loadActiveLoan();
+      // Picks up a brand-new "+ New contact" contact so it's selectable in
+      // this dialog without a full page reload.
+      loadContacts();
     } catch (err) {
       setLendError(friendlyError(err));
     } finally {
@@ -510,7 +525,14 @@ export function BookDetail() {
             <DropdownMenuItem onSelect={() => setMoveShelfOpen(true)}>Move shelf</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setEditOpen(true)}>Edit details</DropdownMenuItem>
             {!activeLoan && (
-              <DropdownMenuItem onSelect={() => setLendOpen(true)}>Lend out</DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => {
+                  setLendOpen(true);
+                  loadContacts();
+                }}
+              >
+                Lend out
+              </DropdownMenuItem>
             )}
             <DropdownMenuItem
               onSelect={() => setDeleteOpen(true)}
@@ -788,6 +810,11 @@ export function BookDetail() {
             <DialogTitle>Lend out</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleCreateLoan} className="space-y-3">
+            {contactsLoadError && (
+              <p className="text-xs text-muted-foreground">
+                Couldn't load contacts, so the contact picker may be empty — try reopening this dialog.
+              </p>
+            )}
             <div className="space-y-1">
               <Label htmlFor="lend-direction">Direction</Label>
               <Select value={lendDirection} onValueChange={(v) => setLendDirection(v as Direction)}>
