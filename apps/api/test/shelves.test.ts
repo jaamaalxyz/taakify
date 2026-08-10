@@ -172,6 +172,28 @@ describe("bookcases + shelves", () => {
     expect(res.status).toBe(400);
   });
 
+  it("PATCH /api/shelves/:id rejects a non-integer, non-numeric, or sub-1 position with 400", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const bc = await addBookcase(cookie, house.id);
+    const shelfRes = await app.request(`/api/bookcases/${bc.body.bookcase.id}/shelves`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ label: "Fiction" }),
+    });
+    const shelf = (await shelfRes.json()).shelf;
+
+    for (const badPosition of [1.5, "abc", 0, -1, true, null]) {
+      const res = await app.request(`/api/shelves/${shelf.id}`, {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ position: badPosition }),
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe("position must be a positive integer");
+    }
+  });
+
   it("PATCH /api/shelves/:id returns 404 for a nonexistent shelf", async () => {
     const { cookie } = await signUp(app);
     const res = await app.request(`/api/shelves/${randomUUID()}`, {
