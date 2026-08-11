@@ -4,13 +4,18 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { Profile } from "./Profile.js";
 import { api } from "../lib/api.js";
+import { listBooks } from "../lib/repo/books.js";
 import { useHousehold } from "../lib/household-context.js";
 import { toast } from "sonner";
 
+// Invites (/api/households/:id/invites) deliberately stay on api() — invite/
+// membership tables aren't in the PGlite mirror (Task 3 scopes it to
+// book-domain tables only) — so api() is still mocked here for that call.
 vi.mock("../lib/api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/api.js")>();
   return { ...actual, api: vi.fn() };
 });
+vi.mock("../lib/repo/books.js", () => ({ listBooks: vi.fn() }));
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
@@ -38,9 +43,9 @@ beforeEach(() => {
 });
 
 function mockApi({ postInvite }: { postInvite?: (body: Record<string, unknown>) => unknown } = {}) {
+  vi.mocked(listBooks).mockResolvedValue(books as never);
   vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
-    if (path.startsWith("/api/books") && method === "GET") return { books };
     if (path === "/api/households/h1/invites" && method === "POST") {
       const body = init?.body ? JSON.parse(init.body as string) : {};
       return postInvite ? postInvite(body) : { url: "/invite/tok123" };
@@ -59,6 +64,7 @@ function renderProfile() {
 
 beforeEach(() => {
   vi.mocked(api).mockReset();
+  vi.mocked(listBooks).mockReset();
   vi.mocked(toast).mockReset();
   vi.mocked(useHousehold).mockReturnValue({ user, household, members });
 });
