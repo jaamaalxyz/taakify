@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { BookOpen } from "lucide-react";
 import { useHousehold } from "../lib/household-context.js";
-import { api } from "../lib/api.js";
+import { listBooks } from "../lib/repo/books.js";
+import { listTags } from "../lib/repo/tags.js";
 import { friendlyError } from "../lib/error-messages.js";
 import {
   OWNERSHIP_LABELS,
@@ -51,7 +52,7 @@ const ALL_TAGS = "all";
 const PAGE_SIZE = 100;
 
 export function Library() {
-  const { household } = useHousehold();
+  const { household, user } = useHousehold();
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [ownership, setOwnership] = useState<Ownership | "">("");
@@ -71,21 +72,21 @@ export function Library() {
   }, [search]);
 
   useEffect(() => {
-    api<{ tags: Tag[] }>(`/api/tags?householdId=${household.id}`)
-      .then((data) => setTags(data.tags))
+    listTags(household.id)
+      .then((data) => setTags(data))
       .catch(() => setTags([]));
   }, [household.id]);
 
-  function buildParams(offset: number) {
-    const params = new URLSearchParams({ householdId: household.id });
-    if (debouncedSearch) params.set("q", debouncedSearch);
-    if (ownership) params.set("ownership", ownership);
-    if (statusFilter !== ALL_STATUSES) params.set("status", statusFilter);
-    if (tagFilter !== ALL_TAGS) params.set("tag", tagFilter);
-    // Omitted on the first page so the request is unchanged from before
-    // pagination existed; only "Load more" sends an explicit offset.
-    if (offset > 0) params.set("offset", String(offset));
-    return params;
+  function buildOptions(offset: number) {
+    return {
+      householdId: household.id,
+      q: debouncedSearch || undefined,
+      ownership: ownership || undefined,
+      status: statusFilter !== ALL_STATUSES ? statusFilter : undefined,
+      statusUserId: statusFilter !== ALL_STATUSES ? user.id : undefined,
+      tag: tagFilter !== ALL_TAGS ? tagFilter : undefined,
+      offset: offset > 0 ? offset : undefined,
+    };
   }
 
   useEffect(() => {
@@ -94,11 +95,11 @@ export function Library() {
     setHasMore(false);
 
     let cancelled = false;
-    api<{ books: LibraryBook[] }>(`/api/books?${buildParams(0).toString()}`)
+    listBooks(buildOptions(0))
       .then((data) => {
         if (cancelled) return;
-        setBooks(data.books);
-        setHasMore(data.books.length === PAGE_SIZE);
+        setBooks(data as LibraryBook[]);
+        setHasMore(data.length === PAGE_SIZE);
       })
       .catch((e) => {
         if (!cancelled) setLoadError(friendlyError(e));
@@ -112,10 +113,10 @@ export function Library() {
   function handleLoadMore() {
     if (!books) return;
     setLoadingMore(true);
-    api<{ books: LibraryBook[] }>(`/api/books?${buildParams(books.length).toString()}`)
+    listBooks(buildOptions(books.length))
       .then((data) => {
-        setBooks((prev) => [...(prev ?? []), ...data.books]);
-        setHasMore(data.books.length === PAGE_SIZE);
+        setBooks((prev) => [...(prev ?? []), ...(data as LibraryBook[])]);
+        setHasMore(data.length === PAGE_SIZE);
       })
       .catch((e) => setLoadError(friendlyError(e)))
       .finally(() => setLoadingMore(false));
