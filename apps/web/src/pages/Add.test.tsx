@@ -4,13 +4,20 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach, beforeAll } from "vitest";
 import { Add } from "./Add.js";
 import { api } from "../lib/api.js";
+import { listBookcases } from "../lib/repo/shelves.js";
+import { createBook } from "../lib/repo/books.js";
 import { useHousehold } from "../lib/household-context.js";
 import { toast } from "sonner";
 
+// The ISBN lookup (/api/editions/lookup) stays on api() — it's an external
+// catalog proxy, not household-scoped data — so api() is still mocked here,
+// alongside the repo modules for bookcases/book-creation.
 vi.mock("../lib/api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/api.js")>();
   return { ...actual, api: vi.fn() };
 });
+vi.mock("../lib/repo/shelves.js", () => ({ listBookcases: vi.fn() }));
+vi.mock("../lib/repo/books.js", () => ({ createBook: vi.fn() }));
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
@@ -40,22 +47,13 @@ const bookcase = {
   shelves: [{ id: "s1", position: 0, label: "Top Shelf", updated_at: "2026-01-01T00:00:00Z" }],
 };
 
-function mockApi({
-  lookup,
-  books,
-}: {
-  lookup?: () => unknown;
-  books?: (body: Record<string, unknown>) => unknown;
-} = {}) {
-  vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
-    if (path.startsWith("/api/bookcases")) return { bookcases: [bookcase] };
+function mockDeps({ lookup }: { lookup?: () => unknown } = {}) {
+  vi.mocked(listBookcases).mockResolvedValue([bookcase]);
+  vi.mocked(createBook).mockResolvedValue("b1");
+  vi.mocked(api).mockImplementation(async (path: string) => {
     if (path.startsWith("/api/editions/lookup")) {
       if (lookup) return lookup();
       throw new Error("not found");
-    }
-    if (path === "/api/books") {
-      const body = init?.body ? JSON.parse(init.body as string) : {};
-      return books ? books(body) : { book: {} };
     }
     throw new Error(`unexpected path: ${path}`);
   });
@@ -71,6 +69,8 @@ function renderAdd() {
 
 beforeEach(() => {
   vi.mocked(api).mockReset();
+  vi.mocked(listBookcases).mockReset();
+  vi.mocked(createBook).mockReset();
   vi.mocked(toast).mockReset();
   vi.mocked(useHousehold).mockReturnValue({
     user: { id: "u1", email: "a@b.com", name: "Ada" },
@@ -81,7 +81,7 @@ beforeEach(() => {
 
 describe("Add", () => {
   it("looks up an ISBN and pre-fills the title on a hit", async () => {
-    mockApi({
+    mockDeps({
       lookup: () => ({
         isbn: "9780000000001",
         title: "Dune",
@@ -103,7 +103,7 @@ describe("Add", () => {
   });
 
   it("reveals an empty manual form with a no-match notice on a lookup miss", async () => {
-    mockApi(); // lookup rejects by default
+    mockDeps(); // lookup rejects by default
     renderAdd();
 
     await userEvent.type(screen.getByLabelText("ISBN", { selector: "#add-isbn-lookup" }), "0000000000");
@@ -114,7 +114,7 @@ describe("Add", () => {
   });
 
   it("submits the manual form and shows a success toast", async () => {
-    mockApi({ books: () => ({ book: { id: "b1" } }) });
+    mockDeps();
     renderAdd();
 
     await userEvent.click(screen.getByRole("tab", { name: "Manual" }));
@@ -125,30 +125,25 @@ describe("Add", () => {
     await userEvent.click(screen.getByRole("button", { name: "Add book" }));
 
     await waitFor(() =>
-      expect(api).toHaveBeenCalledWith(
-        "/api/books",
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({
-            householdId: "h1",
-            edition: {
-              isbn: "9780000000001",
-              title: "Dune",
-              authors: "Frank Herbert",
-              language: undefined,
-              cover_url: undefined,
-            },
-            ownership: "owned",
-            shelf_id: undefined,
-          }),
-        })
-      )
+      expect(createBook).toHaveBeenCalledWith({
+        householdId: "h1",
+        edition: {
+          isbn: "9780000000001",
+          title: "Dune",
+          authors: "Frank Herbert",
+          language: undefined,
+          cover_url: undefined,
+        },
+        ownership: "owned",
+        shelf_id: undefined,
+        createdBy: "u1",
+      })
     );
     expect(toast).toHaveBeenCalledWith('Added "Dune"');
   });
 
   it("batch mode keeps the shelf and ownership selection while clearing book fields", async () => {
-    mockApi({ books: () => ({ book: { id: "b1" } }) });
+    mockDeps();
     renderAdd();
 
     await userEvent.click(screen.getByRole("tab", { name: "Manual" }));
@@ -163,7 +158,7 @@ describe("Add", () => {
     await userEvent.type(screen.getByLabelText("Title"), "Book One");
     await userEvent.click(screen.getByRole("button", { name: "Add book" }));
 
-    await waitFor(() => expect(api).toHaveBeenCalledTimes(2)); // bookcases fetch + POST
+    await waitFor(() => expect(createBook).toHaveBeenCalledTimes(1));
     expect(screen.getByLabelText("Title")).toHaveValue("");
     expect(screen.getByRole("combobox", { name: "Shelf" })).toHaveTextContent("Top Shelf");
 
@@ -171,12 +166,7 @@ describe("Add", () => {
     await userEvent.click(screen.getByRole("button", { name: "Add book" }));
 
     await waitFor(() =>
-      expect(api).toHaveBeenLastCalledWith(
-        "/api/books",
-        expect.objectContaining({
-          body: expect.stringContaining('"shelf_id":"s1"'),
-        })
-      )
+      expect(createBook).toHaveBeenLastCalledWith(expect.objectContaining({ shelf_id: "s1" }))
     );
   });
 });
