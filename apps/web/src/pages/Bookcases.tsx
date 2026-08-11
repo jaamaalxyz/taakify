@@ -2,7 +2,8 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Library as LibraryIcon, ArrowUp, ArrowDown } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
-import { api } from "../lib/api.js";
+import { listBookcases, createBookcase, createShelf, updateShelf } from "../lib/repo/shelves.js";
+import type { Bookcase, Shelf } from "@taakify/shared";
 import { friendlyError } from "../lib/error-messages.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
@@ -20,11 +21,8 @@ import {
   DialogTrigger,
 } from "../components/ui/dialog.js";
 
-type Shelf = { id: string; position: number; label: string; updated_at: string };
-type Bookcase = { id: string; name: string; updated_at: string; shelves: Shelf[] };
-
 export function Bookcases() {
-  const { household } = useHousehold();
+  const { household, user } = useHousehold();
 
   const [bookcases, setBookcases] = useState<Bookcase[] | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -54,8 +52,8 @@ export function Bookcases() {
 
   function loadBookcases() {
     setLoadError("");
-    return api<{ bookcases: Bookcase[] }>(`/api/bookcases?householdId=${household.id}`)
-      .then((data) => setBookcases(data.bookcases))
+    return listBookcases(household.id)
+      .then((data) => setBookcases(data))
       .catch((e) => setLoadError(friendlyError(e)));
   }
 
@@ -70,10 +68,7 @@ export function Bookcases() {
     setBookcaseError("");
     setSavingBookcase(true);
     try {
-      await api("/api/bookcases", {
-        method: "POST",
-        body: JSON.stringify({ householdId: household.id, name: newBookcaseName.trim() }),
-      });
+      await createBookcase(household.id, newBookcaseName.trim(), user.id);
       toast(`Added bookcase "${newBookcaseName.trim()}"`);
       setNewBookcaseName("");
       setAddBookcaseOpen(false);
@@ -91,10 +86,7 @@ export function Bookcases() {
     setShelfError("");
     setSavingShelf(true);
     try {
-      await api(`/api/bookcases/${addShelfFor.id}/shelves`, {
-        method: "POST",
-        body: JSON.stringify({ label: newShelfLabel.trim() || undefined }),
-      });
+      await createShelf(addShelfFor.id, household.id, newShelfLabel.trim() || undefined, user.id);
       toast("Shelf added");
       setNewShelfLabel("");
       setAddShelfFor(null);
@@ -112,10 +104,7 @@ export function Bookcases() {
     setEditShelfError("");
     setSavingEditShelf(true);
     try {
-      await api(`/api/shelves/${editShelf.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ label: editShelfLabel.trim() }),
-      });
+      await updateShelf(editShelf.id, { label: editShelfLabel.trim() });
       toast("Shelf updated");
       setEditShelf(null);
       loadBookcases();
@@ -131,14 +120,8 @@ export function Bookcases() {
     setReorderingShelfId(a.id);
     try {
       await Promise.all([
-        api(`/api/shelves/${a.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({ position: b.position }),
-        }),
-        api(`/api/shelves/${b.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({ position: a.position }),
-        }),
+        updateShelf(a.id, { position: b.position }),
+        updateShelf(b.id, { position: a.position }),
       ]);
     } catch (err) {
       setReorderError(friendlyError(err));
