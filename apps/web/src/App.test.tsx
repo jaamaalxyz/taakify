@@ -15,6 +15,17 @@ vi.mock("./lib/auth.js", () => ({
 
 vi.mock("./lib/api.js", () => ({ api: vi.fn() }));
 
+// AppShell wires an Electric shape sync gate (Task 4) that blocks its
+// children until `synced` is true. Real ShapeStreams would hit the network
+// (no Electric container in the test environment) and never resolve, so
+// routing tests default to "already synced" here -- the gate's own
+// loading-state behavior is covered separately in AppShell.test.tsx.
+vi.mock("./lib/sync/shape.js", () => ({
+  startSync: vi.fn(),
+  getSynced: () => true,
+  onSyncedChange: () => () => {},
+}));
+
 const me = {
   user: { id: "u1", email: "a@b.com", name: "Ada" },
   memberships: [{ household_id: "h1", role: "owner", household_name: "Family Library" }],
