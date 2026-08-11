@@ -3,14 +3,39 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach, beforeAll } from "vitest";
 import { BookDetail } from "./BookDetail.js";
-import { api, ApiError } from "../lib/api.js";
+import { getBook, updateBook, deleteBook } from "../lib/repo/books.js";
+import { listReadingStatuses, upsertMyReadingStatus } from "../lib/repo/reading-status.js";
+import { listBookTags, findOrCreateTag, attachBookTag, removeBookTag } from "../lib/repo/tags.js";
+import { listBookcases } from "../lib/repo/shelves.js";
+import { listTags } from "../lib/repo/tags.js";
+import { listContacts } from "../lib/repo/contacts.js";
+import { listLoans, createLoan, updateLoan } from "../lib/repo/loans.js";
 import { useHousehold } from "../lib/household-context.js";
 import { toast } from "sonner";
 
-vi.mock("../lib/api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/api.js")>();
-  return { ...actual, api: vi.fn() };
-});
+vi.mock("../lib/repo/books.js", () => ({
+  getBook: vi.fn(),
+  updateBook: vi.fn(),
+  deleteBook: vi.fn(),
+}));
+vi.mock("../lib/repo/reading-status.js", () => ({
+  listReadingStatuses: vi.fn(),
+  upsertMyReadingStatus: vi.fn(),
+}));
+vi.mock("../lib/repo/tags.js", () => ({
+  listBookTags: vi.fn(),
+  findOrCreateTag: vi.fn(),
+  attachBookTag: vi.fn(),
+  removeBookTag: vi.fn(),
+  listTags: vi.fn(),
+}));
+vi.mock("../lib/repo/shelves.js", () => ({ listBookcases: vi.fn() }));
+vi.mock("../lib/repo/contacts.js", () => ({ listContacts: vi.fn() }));
+vi.mock("../lib/repo/loans.js", () => ({
+  listLoans: vi.fn(),
+  createLoan: vi.fn(),
+  updateLoan: vi.fn(),
+}));
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
@@ -45,7 +70,7 @@ const members = [
 
 const book = {
   id: "b1",
-  ownership: "owned",
+  ownership: "owned" as const,
   format: null,
   shelf_id: null,
   do_not_lend: false,
@@ -67,7 +92,7 @@ const statuses = [
     id: "rs1",
     book_id: "b1",
     user_id: "u1",
-    status: "reading",
+    status: "reading" as const,
     started_at: null,
     finished_at: null,
     rating: null,
@@ -78,7 +103,7 @@ const statuses = [
     id: "rs2",
     book_id: "b1",
     user_id: "u2",
-    status: "finished",
+    status: "finished" as const,
     started_at: null,
     finished_at: null,
     rating: 5,
@@ -94,97 +119,59 @@ const bookcase = {
   shelves: [{ id: "s1", position: 0, label: "Top Shelf", updated_at: "2026-01-01T00:00:00Z" }],
 };
 
-const noLoans = { loans: [] as unknown[] };
-
-function mockApi({
+function mockRepo({
+  bookOverride,
   statusList = statuses,
-  putStatus,
   tags = [],
   bookTags: initialBookTags = [],
-  postTag,
-  postBookTag,
-  del,
-  delTag,
   bookcases = [bookcase],
-  patchBook,
-  loans = noLoans,
+  loans = [] as unknown[],
   contacts = [],
-  postLoan,
-  patchLoan,
-  bookOverride,
 }: {
+  bookOverride?: Partial<typeof book>;
   statusList?: typeof statuses;
-  putStatus?: (body: Record<string, unknown>) => unknown;
   tags?: { id: string; name: string; updated_at: string }[];
   bookTags?: { id: string; name: string; updated_at: string }[];
-  postTag?: (body: Record<string, unknown>) => unknown;
-  postBookTag?: (body: Record<string, unknown>) => unknown;
-  del?: () => unknown;
-  delTag?: () => unknown;
   bookcases?: (typeof bookcase)[];
-  patchBook?: (body: Record<string, unknown>) => unknown;
-  loans?: { loans: unknown[] };
+  loans?: unknown[];
   contacts?: { id: string; name: string }[];
-  postLoan?: (body: Record<string, unknown>) => unknown;
-  patchLoan?: (body: Record<string, unknown>) => unknown;
-  bookOverride?: Partial<typeof book>;
 } = {}) {
-  // Tracks tag id -> tag across both /api/tags (household tags) and any
-  // freshly created tags, so /api/books/b1/tags can echo back real names
-  // after a POST — mirrors the real server's book_tag/tag join.
+  const book1 = bookOverride ? { ...book, ...bookOverride } : book;
+  vi.mocked(getBook).mockResolvedValue(book1);
+  vi.mocked(listReadingStatuses).mockResolvedValue(statusList);
+  vi.mocked(listTags).mockResolvedValue(tags);
+  vi.mocked(listBookcases).mockResolvedValue(bookcases);
+  vi.mocked(listLoans).mockResolvedValue(loans as never);
+  vi.mocked(listContacts).mockResolvedValue(contacts as never);
+  vi.mocked(updateBook).mockResolvedValue(undefined);
+  vi.mocked(deleteBook).mockResolvedValue(undefined);
+  vi.mocked(upsertMyReadingStatus).mockResolvedValue(undefined);
+  vi.mocked(updateLoan).mockResolvedValue(undefined);
+
+  // Tracks the book's currently-attached tags across listBookTags,
+  // findOrCreateTag, attachBookTag, and removeBookTag calls, mirroring how
+  // the real mirror table would reflect an add/remove immediately —
+  // BookDetail.tsx refetches via listBookTags() after each mutation.
   const tagsById = new Map(tags.map((t) => [t.id, t]));
   let currentBookTags = [...initialBookTags];
   for (const t of initialBookTags) tagsById.set(t.id, t);
 
-  vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
-    const method = init?.method ?? "GET";
-    const book1 = bookOverride ? { ...book, ...bookOverride } : book;
-    if (path === "/api/books/b1" && method === "GET") return { book: book1 };
-    if (path === "/api/books/b1/status" && method === "GET") return { statuses: statusList };
-    if (path === "/api/books/b1/status" && method === "PUT") {
-      const body = init?.body ? JSON.parse(init.body as string) : {};
-      return putStatus ? putStatus(body) : { status: { ...statuses[0], ...body } };
-    }
-    if (path.startsWith("/api/bookcases")) return { bookcases };
-    if (path === "/api/books/b1/tags" && method === "GET") return { tags: currentBookTags };
-    if (path.startsWith("/api/tags") && method === "GET") return { tags };
-    if (path === "/api/tags" && method === "POST") {
-      const body = init?.body ? JSON.parse(init.body as string) : {};
-      const result = (
-        postTag ? postTag(body) : { tag: { id: "t1", name: body.name, updated_at: "2026-01-01T00:00:00Z" } }
-      ) as { tag: { id: string; name: string; updated_at: string } };
-      tagsById.set(result.tag.id, result.tag);
-      return result;
-    }
-    if (path === "/api/books/b1/tags" && method === "POST") {
-      const body = init?.body ? JSON.parse(init.body as string) : {};
-      const result = postBookTag ? postBookTag(body) : { bookTag: { id: "bt1", tag_id: body.tagId } };
-      const tag = tagsById.get(body.tagId);
-      if (tag && !currentBookTags.some((t) => t.id === tag.id)) currentBookTags = [...currentBookTags, tag];
-      return result;
-    }
-    if (path.startsWith("/api/books/b1/tags/") && method === "DELETE") {
-      const tagId = path.split("/").pop();
-      currentBookTags = currentBookTags.filter((t) => t.id !== tagId);
-      return delTag ? delTag() : { ok: true };
-    }
-    if (path === "/api/books/b1" && method === "PATCH") {
-      const body = init?.body ? JSON.parse(init.body as string) : {};
-      return patchBook ? patchBook(body) : { book: { ...book1, ...body } };
-    }
-    if (path === "/api/books/b1" && method === "DELETE") return del ? del() : { ok: true };
-    if (path.startsWith("/api/loans") && method === "GET") return loans;
-    if (path.startsWith("/api/contacts") && method === "GET") return { contacts };
-    if (path === "/api/loans" && method === "POST") {
-      const body = init?.body ? JSON.parse(init.body as string) : {};
-      return postLoan ? postLoan(body) : { loan: { id: "l1", ...body } };
-    }
-    if (path.startsWith("/api/loans/") && method === "PATCH") {
-      const body = init?.body ? JSON.parse(init.body as string) : {};
-      return patchLoan ? patchLoan(body) : { loan: { id: "l1", ...body } };
-    }
-    throw new Error(`unexpected call: ${method} ${path}`);
+  vi.mocked(listBookTags).mockImplementation(async () => currentBookTags);
+  vi.mocked(findOrCreateTag).mockImplementation(async (_h, name) => {
+    const existing = [...tagsById.values()].find((t) => t.name === name);
+    if (existing) return existing;
+    const tag = { id: "t1", name, updated_at: "2026-01-01T00:00:00Z" };
+    tagsById.set(tag.id, tag);
+    return tag;
   });
+  vi.mocked(attachBookTag).mockImplementation(async (_bookId, _householdId, tagId) => {
+    const tag = tagsById.get(tagId);
+    if (tag && !currentBookTags.some((t) => t.id === tag.id)) currentBookTags = [...currentBookTags, tag];
+  });
+  vi.mocked(removeBookTag).mockImplementation(async (_bookId, tagId) => {
+    currentBookTags = currentBookTags.filter((t) => t.id !== tagId);
+  });
+  vi.mocked(createLoan).mockResolvedValue("l1");
 }
 
 function renderBookDetail() {
@@ -198,7 +185,21 @@ function renderBookDetail() {
 }
 
 beforeEach(() => {
-  vi.mocked(api).mockReset();
+  vi.mocked(getBook).mockReset();
+  vi.mocked(updateBook).mockReset();
+  vi.mocked(deleteBook).mockReset();
+  vi.mocked(listReadingStatuses).mockReset();
+  vi.mocked(upsertMyReadingStatus).mockReset();
+  vi.mocked(listBookTags).mockReset();
+  vi.mocked(findOrCreateTag).mockReset();
+  vi.mocked(attachBookTag).mockReset();
+  vi.mocked(removeBookTag).mockReset();
+  vi.mocked(listBookcases).mockReset();
+  vi.mocked(listTags).mockReset();
+  vi.mocked(listContacts).mockReset();
+  vi.mocked(listLoans).mockReset();
+  vi.mocked(createLoan).mockReset();
+  vi.mocked(updateLoan).mockReset();
   vi.mocked(toast).mockReset();
   navigateMock.mockReset();
   vi.mocked(useHousehold).mockReturnValue({ user, household, members });
@@ -206,33 +207,29 @@ beforeEach(() => {
 
 describe("BookDetail", () => {
   it("loads the book and all members' statuses and renders them", async () => {
-    mockApi();
+    mockRepo();
     renderBookDetail();
 
     expect(await screen.findByText("Dune")).toBeInTheDocument();
     expect(screen.getByText("Frank Herbert")).toBeInTheDocument();
     expect(screen.getByText(/9780000000001/)).toBeInTheDocument();
-    // The caller's own row is labeled "You"; another member's row resolves to
-    // their roster name (not a raw uuid) via the household members list.
     expect(await screen.findByText("You:")).toBeInTheDocument();
     expect(screen.getByText("Grace:")).toBeInTheDocument();
     expect(screen.queryByText(/Member \(/)).not.toBeInTheDocument();
   });
 
   it("shows a load error when the book fetch fails", async () => {
-    // A 404 from the API renders friendlyError()'s status-based copy, not
-    // the raw ("not found" is reused across unrelated routes and can't be
-    // shown to the user as-is — see lib/error-messages.ts).
-    vi.mocked(api).mockRejectedValue(new ApiError("not found", 404));
+    mockRepo();
+    vi.mocked(getBook).mockRejectedValue(new Error("boom"));
     renderBookDetail();
 
     expect(
-      await screen.findByText(/Couldn't load this book: That doesn't exist anymore/)
+      await screen.findByText(/Couldn't load this book: Couldn't connect/)
     ).toBeInTheDocument();
   });
 
-  it("editing my status calls PUT /api/books/:id/status", async () => {
-    mockApi();
+  it("editing my status calls upsertMyReadingStatus", async () => {
+    mockRepo();
     renderBookDetail();
     await screen.findByText("Dune");
 
@@ -242,19 +239,17 @@ describe("BookDetail", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save status" }));
 
     await waitFor(() =>
-      expect(api).toHaveBeenCalledWith(
-        "/api/books/b1/status",
-        expect.objectContaining({
-          method: "PUT",
-          body: expect.stringContaining('"rating":4'),
-        })
+      expect(upsertMyReadingStatus).toHaveBeenCalledWith(
+        "b1",
+        "u1",
+        expect.objectContaining({ rating: 4 })
       )
     );
     expect(toast).toHaveBeenCalledWith("Status updated");
   });
 
-  it("loads tags already on the book from GET /api/books/:id/tags (persists across reload)", async () => {
-    mockApi({ bookTags: [{ id: "t9", name: "classic", updated_at: "2026-01-01T00:00:00Z" }] });
+  it("loads tags already on the book from listBookTags (persists across reload)", async () => {
+    mockRepo({ bookTags: [{ id: "t9", name: "classic", updated_at: "2026-01-01T00:00:00Z" }] });
     renderBookDetail();
     await screen.findByText("Dune");
 
@@ -262,44 +257,28 @@ describe("BookDetail", () => {
   });
 
   it("shows an empty-tags message when the book has no tags yet", async () => {
-    mockApi();
+    mockRepo();
     renderBookDetail();
     await screen.findByText("Dune");
 
     expect(await screen.findByText("No tags on this book yet.")).toBeInTheDocument();
   });
 
-  it("adding a tag calls POST /api/tags then POST /api/books/:id/tags", async () => {
-    mockApi();
+  it("adding a tag calls findOrCreateTag then attachBookTag", async () => {
+    mockRepo();
     renderBookDetail();
     await screen.findByText("Dune");
 
     await userEvent.type(screen.getByLabelText("Or new tag"), "sci-fi");
     await userEvent.click(screen.getByRole("button", { name: "Add tag" }));
 
-    await waitFor(() =>
-      expect(api).toHaveBeenCalledWith(
-        "/api/tags",
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ householdId: "h1", name: "sci-fi" }),
-        })
-      )
-    );
-    await waitFor(() =>
-      expect(api).toHaveBeenCalledWith(
-        "/api/books/b1/tags",
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ tagId: "t1" }),
-        })
-      )
-    );
+    await waitFor(() => expect(findOrCreateTag).toHaveBeenCalledWith("h1", "sci-fi", "u1"));
+    await waitFor(() => expect(attachBookTag).toHaveBeenCalledWith("b1", "h1", "t1"));
     expect(await screen.findByText("sci-fi")).toBeInTheDocument();
   });
 
-  it("removing an added tag calls DELETE /api/books/:id/tags/:tagId", async () => {
-    mockApi();
+  it("removing an added tag calls removeBookTag", async () => {
+    mockRepo();
     renderBookDetail();
     await screen.findByText("Dune");
 
@@ -309,17 +288,12 @@ describe("BookDetail", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Remove tag sci-fi" }));
 
-    await waitFor(() =>
-      expect(api).toHaveBeenCalledWith(
-        "/api/books/b1/tags/t1",
-        expect.objectContaining({ method: "DELETE" })
-      )
-    );
+    await waitFor(() => expect(removeBookTag).toHaveBeenCalledWith("b1", "t1"));
     expect(toast).toHaveBeenCalledWith('Removed tag "sci-fi"');
   });
 
-  it("move-shelf action calls PATCH /api/books/:id with the selected shelf_id", async () => {
-    mockApi();
+  it("move-shelf action calls updateBook with the selected shelf_id", async () => {
+    mockRepo();
     renderBookDetail();
     await screen.findByText("Dune");
 
@@ -330,20 +304,12 @@ describe("BookDetail", () => {
     await userEvent.click(await screen.findByRole("option", { name: /Top Shelf/ }));
     await userEvent.click(screen.getByRole("button", { name: "Move" }));
 
-    await waitFor(() =>
-      expect(api).toHaveBeenCalledWith(
-        "/api/books/b1",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ shelf_id: "s1" }),
-        })
-      )
-    );
+    await waitFor(() => expect(updateBook).toHaveBeenCalledWith("b1", { shelf_id: "s1" }));
     expect(toast).toHaveBeenCalledWith("Shelf updated");
   });
 
-  it("edit-details action calls PATCH /api/books/:id with the edited fields", async () => {
-    mockApi();
+  it("edit-details action calls updateBook with the edited fields", async () => {
+    mockRepo();
     renderBookDetail();
     await screen.findByText("Dune");
 
@@ -354,24 +320,18 @@ describe("BookDetail", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() =>
-      expect(api).toHaveBeenCalledWith(
-        "/api/books/b1",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({
-            ownership: "owned",
-            notes: "Great condition",
-            do_not_lend: false,
-            wishlist_priority: null,
-          }),
-        })
-      )
+      expect(updateBook).toHaveBeenCalledWith("b1", {
+        ownership: "owned",
+        notes: "Great condition",
+        do_not_lend: false,
+        wishlist_priority: null,
+      })
     );
     expect(toast).toHaveBeenCalledWith("Book updated");
   });
 
-  it("delete action calls DELETE and navigates to /library", async () => {
-    mockApi();
+  it("delete action calls deleteBook and navigates to /library", async () => {
+    mockRepo();
     renderBookDetail();
     await screen.findByText("Dune");
 
@@ -379,26 +339,22 @@ describe("BookDetail", () => {
     await userEvent.click(await screen.findByText("Delete"));
     await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
-    await waitFor(() =>
-      expect(api).toHaveBeenCalledWith("/api/books/b1", expect.objectContaining({ method: "DELETE" }))
-    );
+    await waitFor(() => expect(deleteBook).toHaveBeenCalledWith("b1"));
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/library"));
   });
 
   it("shows the active loan status with contact, due date, and overdue badge", async () => {
-    mockApi({
-      loans: {
-        loans: [
-          {
-            id: "l1",
-            direction: "lent_out",
-            due_date: "2026-01-01",
-            returned_date: null,
-            overdue: true,
-            contact: { id: "c1", name: "Alex" },
-          },
-        ],
-      },
+    mockRepo({
+      loans: [
+        {
+          id: "l1",
+          direction: "lent_out",
+          due_date: "2026-01-01",
+          returned_date: null,
+          overdue: true,
+          contact: { id: "c1", name: "Alex" },
+        },
+      ],
     });
     renderBookDetail();
     await screen.findByText("Dune");
@@ -408,7 +364,7 @@ describe("BookDetail", () => {
   });
 
   it("no active loan: no loan banner, and 'Lend out' menu item is present", async () => {
-    mockApi();
+    mockRepo();
     renderBookDetail();
     await screen.findByText("Dune");
 
@@ -418,19 +374,17 @@ describe("BookDetail", () => {
   });
 
   it("with an active loan: 'Lend out' menu item is absent", async () => {
-    mockApi({
-      loans: {
-        loans: [
-          {
-            id: "l1",
-            direction: "lent_out",
-            due_date: null,
-            returned_date: null,
-            overdue: false,
-            contact: { id: "c1", name: "Alex" },
-          },
-        ],
-      },
+    mockRepo({
+      loans: [
+        {
+          id: "l1",
+          direction: "lent_out",
+          due_date: null,
+          returned_date: null,
+          overdue: false,
+          contact: { id: "c1", name: "Alex" },
+        },
+      ],
     });
     renderBookDetail();
     await screen.findByText("Dune");
@@ -440,8 +394,8 @@ describe("BookDetail", () => {
     expect(screen.queryByText("Lend out")).not.toBeInTheDocument();
   });
 
-  it("submitting the lend dialog calls POST /api/loans with bookId and no book picker", async () => {
-    mockApi();
+  it("submitting the lend dialog calls createLoan with bookId and no book picker", async () => {
+    mockRepo();
     renderBookDetail();
     await screen.findByText("Dune");
 
@@ -453,82 +407,60 @@ describe("BookDetail", () => {
     await userEvent.click(screen.getByRole("button", { name: "Record loan" }));
 
     await waitFor(() =>
-      expect(api).toHaveBeenCalledWith(
-        "/api/loans",
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({
-            bookId: "b1",
-            direction: "lent_out",
-            dueDate: undefined,
-            contactId: undefined,
-            contactName: "Alex",
-          }),
-        })
-      )
+      expect(createLoan).toHaveBeenCalledWith({
+        bookId: "b1",
+        direction: "lent_out",
+        dueDate: undefined,
+        contactId: undefined,
+        contactName: "Alex",
+        createdBy: "u1",
+      })
     );
     expect(toast).toHaveBeenCalledWith("Loan recorded");
   });
 
   it("contacts are only fetched when the lend dialog opens, and a newly-created contact is selectable without a reload", async () => {
-    mockApi({ contacts: [{ id: "c1", name: "Alex" }] });
+    mockRepo({ contacts: [{ id: "c1", name: "Alex" }] });
     renderBookDetail();
     await screen.findByText("Dune");
 
     // Contacts must not be fetched just from mounting the page.
-    expect(
-      vi.mocked(api).mock.calls.some(([path]) => String(path).startsWith("/api/contacts"))
-    ).toBe(false);
+    expect(listContacts).not.toHaveBeenCalled();
 
     await userEvent.click(screen.getByRole("button", { name: "Actions" }));
     await userEvent.click(await screen.findByText("Lend out"));
 
     // Choosing "Lend out" triggers the (now lazy) contacts fetch.
-    await waitFor(() => expect(api).toHaveBeenCalledWith("/api/contacts?householdId=h1"));
+    await waitFor(() => expect(listContacts).toHaveBeenCalledWith("h1"));
 
-    // Recording a loan via "+ New contact" creates "Sam", then re-fetches
-    // contacts so it appears in the picker without a full page reload.
     await userEvent.type(await screen.findByLabelText("New contact name"), "Sam");
     await userEvent.click(screen.getByRole("button", { name: "Record loan" }));
     await waitFor(() => expect(toast).toHaveBeenCalledWith("Loan recorded"));
 
     await waitFor(() => {
-      const calls = vi.mocked(api).mock.calls.filter(([path]) => path === "/api/contacts?householdId=h1");
-      expect(calls.length).toBeGreaterThanOrEqual(2);
+      expect(vi.mocked(listContacts).mock.calls.length).toBeGreaterThanOrEqual(2);
     });
   });
 
-  it("clicking 'Mark returned' calls PATCH /api/loans/:id and the active-loan banner disappears", async () => {
+  it("clicking 'Mark returned' calls updateLoan and the active-loan banner disappears", async () => {
     let returned = false;
-    vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
-      const method = init?.method ?? "GET";
-      if (path === "/api/books/b1" && method === "GET") return { book };
-      if (path === "/api/books/b1/status" && method === "GET") return { statuses };
-      if (path.startsWith("/api/bookcases")) return { bookcases: [bookcase] };
-      if (path === "/api/books/b1/tags" && method === "GET") return { tags: [] };
-      if (path.startsWith("/api/tags") && method === "GET") return { tags: [] };
-      if (path.startsWith("/api/loans") && method === "GET") {
-        return returned
-          ? { loans: [] }
-          : {
-              loans: [
-                {
-                  id: "l1",
-                  direction: "lent_out",
-                  due_date: null,
-                  returned_date: null,
-                  overdue: false,
-                  contact: { id: "c1", name: "Alex" },
-                },
-              ],
-            };
-      }
-      if (path === "/api/loans/l1" && method === "PATCH") {
-        const body = init?.body ? JSON.parse(init.body as string) : {};
-        returned = true;
-        return { loan: { id: "l1", returned_date: body.returned_date } };
-      }
-      throw new Error(`unexpected call: ${method} ${path}`);
+    mockRepo();
+    vi.mocked(listLoans).mockImplementation(async () =>
+      returned
+        ? []
+        : ([
+            {
+              id: "l1",
+              direction: "lent_out",
+              due_date: null,
+              returned_date: null,
+              overdue: false,
+              contact: { id: "c1", name: "Alex" },
+            },
+          ] as never)
+    );
+    vi.mocked(updateLoan).mockImplementation(async () => {
+      returned = true;
     });
     renderBookDetail();
     await screen.findByText("Dune");
@@ -537,28 +469,20 @@ describe("BookDetail", () => {
     await userEvent.click(screen.getByRole("button", { name: "Mark returned" }));
 
     await waitFor(() =>
-      expect(api).toHaveBeenCalledWith(
-        "/api/loans/l1",
-        expect.objectContaining({
-          method: "PATCH",
-          body: expect.stringContaining('"returned_date"'),
-        })
-      )
+      expect(updateLoan).toHaveBeenCalledWith("l1", expect.objectContaining({ returned_date: expect.any(String) }))
     );
     expect(toast).toHaveBeenCalledWith("Marked as returned");
     await waitFor(() => expect(screen.queryByText(/Lent out · Alex/)).not.toBeInTheDocument());
   });
 
   it("lending a do-not-lend book shows a warning and hides the form until acknowledged", async () => {
-    mockApi({ bookOverride: { do_not_lend: true } });
+    mockRepo({ bookOverride: { do_not_lend: true } });
     renderBookDetail();
     await screen.findByText("Dune");
 
     await userEvent.click(screen.getByRole("button", { name: "Actions" }));
     await userEvent.click(await screen.findByText("Lend out"));
 
-    // The warning is shown and the form fields are absent until "Lend anyway"
-    // is clicked — the user can't accidentally submit a do-not-lend loan.
     expect(screen.getByText(/marked “do not lend.” Lend it anyway\?/)).toBeInTheDocument();
     expect(screen.queryByLabelText("Direction")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Contact")).not.toBeInTheDocument();
@@ -567,7 +491,7 @@ describe("BookDetail", () => {
   });
 
   it("confirming the do-not-lend warning reveals the form and allows the loan", async () => {
-    mockApi({ bookOverride: { do_not_lend: true } });
+    mockRepo({ bookOverride: { do_not_lend: true } });
     renderBookDetail();
     await screen.findByText("Dune");
 
@@ -576,16 +500,10 @@ describe("BookDetail", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Lend anyway" }));
 
-    // The form is now visible and behaves exactly like the normal lend flow.
     await userEvent.type(await screen.findByLabelText("New contact name"), "Alex");
     await userEvent.click(screen.getByRole("button", { name: "Record loan" }));
 
-    await waitFor(() =>
-      expect(api).toHaveBeenCalledWith(
-        "/api/loans",
-        expect.objectContaining({ method: "POST" })
-      )
-    );
+    await waitFor(() => expect(createLoan).toHaveBeenCalled());
     expect(toast).toHaveBeenCalledWith("Loan recorded");
   });
 });

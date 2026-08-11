@@ -3,8 +3,22 @@ import { useNavigate, useParams } from "react-router-dom";
 import { BookOpen, MoreVertical } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
-import { api } from "../lib/api.js";
+import { getBook, updateBook, deleteBook } from "../lib/repo/books.js";
+import { listReadingStatuses, upsertMyReadingStatus } from "../lib/repo/reading-status.js";
+import { listBookTags, findOrCreateTag, attachBookTag, removeBookTag } from "../lib/repo/tags.js";
+import { listBookcases } from "../lib/repo/shelves.js";
+import { listTags } from "../lib/repo/tags.js";
+import { listContacts } from "../lib/repo/contacts.js";
+import { listLoans, createLoan, updateLoan } from "../lib/repo/loans.js";
 import { friendlyError } from "../lib/error-messages.js";
+import type {
+  Book,
+  Bookcase,
+  Contact,
+  Loan,
+  ReadingStatusRow as SharedReadingStatusRow,
+  Tag,
+} from "@taakify/shared";
 import {
   LOAN_DIRECTION_LABELS,
   OWNERSHIP_LABELS,
@@ -48,51 +62,7 @@ import {
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.js";
 
-type Book = {
-  id: string;
-  ownership: Ownership;
-  format: string | null;
-  shelf_id: string | null;
-  do_not_lend: boolean;
-  wishlist_priority: WishlistPriority | null;
-  notes: string | null;
-  updated_at: string;
-  edition: {
-    id: string;
-    title: string;
-    authors: string;
-    cover_url: string | null;
-    isbn: string | null;
-    language: string | null;
-  };
-};
-
-type Status = {
-  id: string;
-  book_id: string;
-  user_id: string;
-  status: ReadingStatus;
-  started_at: string | null;
-  finished_at: string | null;
-  rating: number | null;
-  review_note: string | null;
-  updated_at: string;
-};
-
-type Shelf = { id: string; position: number; label: string; updated_at: string };
-type Bookcase = { id: string; name: string; updated_at: string; shelves: Shelf[] };
-type Tag = { id: string; name: string; updated_at: string };
-
-type Loan = {
-  id: string;
-  direction: Direction;
-  due_date: string | null;
-  returned_date: string | null;
-  overdue: boolean;
-  contact: { id: string; name: string };
-};
-
-type Contact = { id: string; name: string };
+type Status = SharedReadingStatusRow;
 
 const NO_SHELF = "none";
 const NEW_CONTACT = "__new__";
@@ -184,9 +154,8 @@ export function BookDetail() {
   function loadActiveLoan() {
     if (!bookId) return;
     setLoanLoadError("");
-    const params = new URLSearchParams({ householdId: household.id, bookId, active: "true" });
-    api<{ loans: Loan[] }>(`/api/loans?${params.toString()}`)
-      .then((data) => setActiveLoan(data.loans[0] ?? null))
+    listLoans({ householdId: household.id, bookId, active: true })
+      .then((loans) => setActiveLoan(loans[0] ?? null))
       .catch((e) => setLoanLoadError(friendlyError(e)));
   }
 
@@ -195,17 +164,17 @@ export function BookDetail() {
     setBook(null);
     setLoadError("");
     // See lib/error-messages.ts for how errors are mapped to user-facing copy.
-    api<{ book: Book }>(`/api/books/${bookId}`)
-      .then((data) => setBook(data.book))
+    getBook(bookId)
+      .then((data) => setBook(data))
       .catch((e) => setLoadError(friendlyError(e)));
   }
 
   function loadStatuses() {
     if (!bookId) return;
-    api<{ statuses: Status[] }>(`/api/books/${bookId}/status`)
+    listReadingStatuses(bookId)
       .then((data) => {
-        setStatuses(data.statuses);
-        const mine = data.statuses.find((s) => s.user_id === user.id);
+        setStatuses(data);
+        const mine = data.find((s) => s.user_id === user.id);
         if (mine) {
           setMyStatus(mine.status);
           setMyRating(mine.rating ? String(mine.rating) : "");
@@ -219,8 +188,8 @@ export function BookDetail() {
 
   function loadBookTags() {
     if (!bookId) return;
-    api<{ tags: Tag[] }>(`/api/books/${bookId}/tags`)
-      .then((data) => setBookTags(data.tags))
+    listBookTags(bookId)
+      .then((data) => setBookTags(data))
       .catch((e) => setTagError(friendlyError(e)));
   }
 
@@ -233,8 +202,8 @@ export function BookDetail() {
   // visits never open.
   function loadContacts() {
     setContactsLoadError("");
-    api<{ contacts: Contact[] }>(`/api/contacts?householdId=${household.id}`)
-      .then((data) => setContacts(data.contacts))
+    listContacts(household.id)
+      .then((data) => setContacts(data))
       .catch((e) => {
         setContacts([]);
         setContactsLoadError(friendlyError(e));
@@ -260,11 +229,11 @@ export function BookDetail() {
   }, [book]);
 
   useEffect(() => {
-    api<{ bookcases: Bookcase[] }>(`/api/bookcases?householdId=${household.id}`)
-      .then((data) => setBookcases(data.bookcases))
+    listBookcases(household.id)
+      .then((data) => setBookcases(data))
       .catch(() => setBookcases([]));
-    api<{ tags: Tag[] }>(`/api/tags?householdId=${household.id}`)
-      .then((data) => setHouseholdTags(data.tags))
+    listTags(household.id)
+      .then((data) => setHouseholdTags(data))
       .catch(() => setHouseholdTags([]));
   }, [household.id]);
 
@@ -274,15 +243,12 @@ export function BookDetail() {
     setStatusError("");
     setSavingStatus(true);
     try {
-      await api(`/api/books/${bookId}/status`, {
-        method: "PUT",
-        body: JSON.stringify({
-          status: myStatus,
-          rating: myRating ? Number(myRating) : undefined,
-          review_note: myNote.trim() || undefined,
-          started_at: myStartedAt ?? undefined,
-          finished_at: myFinishedAt ?? undefined,
-        }),
+      await upsertMyReadingStatus(bookId, user.id, {
+        status: myStatus,
+        rating: myRating ? Number(myRating) : undefined,
+        review_note: myNote.trim() || undefined,
+        started_at: myStartedAt ?? undefined,
+        finished_at: myFinishedAt ?? undefined,
       });
       toast("Status updated");
       loadStatuses();
@@ -301,10 +267,7 @@ export function BookDetail() {
       let tagId = selectedTagId;
       let tag: Tag;
       if (!tagId && newTagName.trim()) {
-        tag = await api<{ tag: Tag }>("/api/tags", {
-          method: "POST",
-          body: JSON.stringify({ householdId: household.id, name: newTagName.trim() }),
-        }).then((d) => d.tag);
+        tag = await findOrCreateTag(household.id, newTagName.trim(), user.id);
         tagId = tag.id;
         setHouseholdTags((prev) => (prev.some((t) => t.id === tag.id) ? prev : [...prev, tag]));
       } else {
@@ -317,10 +280,7 @@ export function BookDetail() {
         tag = found;
       }
 
-      await api(`/api/books/${bookId}/tags`, {
-        method: "POST",
-        body: JSON.stringify({ tagId }),
-      });
+      await attachBookTag(bookId, household.id, tagId);
       loadBookTags();
       toast(`Added tag "${tag.name}"`);
       setSelectedTagId("");
@@ -335,7 +295,7 @@ export function BookDetail() {
   async function handleRemoveTag(tag: Tag) {
     if (!bookId) return;
     try {
-      await api(`/api/books/${bookId}/tags/${tag.id}`, { method: "DELETE" });
+      await removeBookTag(bookId, tag.id);
       loadBookTags();
       toast(`Removed tag "${tag.name}"`);
     } catch (err) {
@@ -348,11 +308,9 @@ export function BookDetail() {
     setShelfError("");
     setSavingShelf(true);
     try {
-      const data = await api<{ book: Book }>(`/api/books/${bookId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ shelf_id: moveShelfId === NO_SHELF ? null : moveShelfId }),
-      });
-      setBook(data.book);
+      const newShelfId = moveShelfId === NO_SHELF ? null : moveShelfId;
+      await updateBook(bookId, { shelf_id: newShelfId });
+      setBook((prev) => (prev ? { ...prev, shelf_id: newShelfId } : prev));
       toast("Shelf updated");
       setMoveShelfOpen(false);
     } catch (err) {
@@ -368,16 +326,25 @@ export function BookDetail() {
     setEditError("");
     setSavingEdit(true);
     try {
-      const data = await api<{ book: Book }>(`/api/books/${bookId}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          ownership: editOwnership,
-          notes: editNotes.trim() || null,
-          do_not_lend: editDoNotLend,
-          wishlist_priority: editPriority === "none" ? null : editPriority,
-        }),
+      const notes = editNotes.trim() || null;
+      const wishlistPriority = editPriority === "none" ? null : editPriority;
+      await updateBook(bookId, {
+        ownership: editOwnership,
+        notes,
+        do_not_lend: editDoNotLend,
+        wishlist_priority: wishlistPriority,
       });
-      setBook(data.book);
+      setBook((prev) =>
+        prev
+          ? {
+              ...prev,
+              ownership: editOwnership,
+              notes,
+              do_not_lend: editDoNotLend,
+              wishlist_priority: wishlistPriority,
+            }
+          : prev
+      );
       toast("Book updated");
       setEditOpen(false);
     } catch (err) {
@@ -392,7 +359,7 @@ export function BookDetail() {
     setDeleteError("");
     setDeleting(true);
     try {
-      await api(`/api/books/${bookId}`, { method: "DELETE" });
+      await deleteBook(bookId);
       toast("Book deleted");
       navigate("/library");
     } catch (err) {
@@ -415,15 +382,13 @@ export function BookDetail() {
     setLendError("");
     setSavingLoan(true);
     try {
-      await api("/api/loans", {
-        method: "POST",
-        body: JSON.stringify({
-          bookId,
-          direction: lendDirection,
-          dueDate: lendDueDate || undefined,
-          contactId: lendContactSelection === NEW_CONTACT ? undefined : lendContactSelection,
-          contactName: lendContactSelection === NEW_CONTACT ? lendNewContactName.trim() : undefined,
-        }),
+      await createLoan({
+        bookId,
+        direction: lendDirection,
+        dueDate: lendDueDate || undefined,
+        contactId: lendContactSelection === NEW_CONTACT ? undefined : lendContactSelection,
+        contactName: lendContactSelection === NEW_CONTACT ? lendNewContactName.trim() : undefined,
+        createdBy: user.id,
       });
       toast("Loan recorded");
       setLendOpen(false);
@@ -448,10 +413,7 @@ export function BookDetail() {
     setReturnError("");
     setReturningLoan(true);
     try {
-      await api(`/api/loans/${activeLoan.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ returned_date: todayStr() }),
-      });
+      await updateLoan(activeLoan.id, { returned_date: todayStr() });
       toast("Marked as returned");
       loadActiveLoan();
     } catch (err) {
