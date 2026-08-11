@@ -15,6 +15,20 @@ vi.mock("./lib/auth.js", () => ({
 
 vi.mock("./lib/api.js", () => ({ api: vi.fn() }));
 
+// App.tsx's route table imports every page module eagerly (no route-level
+// code splitting), so rendering App here transitively imports every
+// repo/*.js file — each of which imports the real db/pglite.js singleton
+// (`idb://` IndexedDB storage, browser-only). Mock it the same way
+// shape.test.ts does, purely to avoid an unhandled IndexedDB-open rejection
+// during import; no test here exercises repo reads/writes directly.
+vi.mock("./lib/db/pglite.js", () => ({ db: undefined, ready: Promise.resolve() }));
+
+// The Library route (rendered by several tests below) reads via
+// repo/books.js and repo/tags.js, not api() — mock them so those tests get
+// deterministic empty results instead of hanging on the stubbed `ready`.
+vi.mock("./lib/repo/books.js", () => ({ listBooks: vi.fn().mockResolvedValue([]) }));
+vi.mock("./lib/repo/tags.js", () => ({ listTags: vi.fn().mockResolvedValue([]) }));
+
 // AppShell wires an Electric shape sync gate (Task 4) that blocks its
 // children until `synced` is true. Real ShapeStreams would hit the network
 // (no Electric container in the test environment) and never resolve, so
