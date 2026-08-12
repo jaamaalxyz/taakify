@@ -198,4 +198,90 @@ describe("tags", () => {
     const res = await app.request("/api/tags?householdId=x");
     expect(res.status).toBe(401);
   });
+
+  // --- Client-supplied id + idempotent upsert (fix round) -----------------
+
+  it("POST with a client-supplied id creates the tag under that exact id", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const id = randomUUID();
+
+    const res = await app.request("/api/tags", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ id, householdId: house.id, name: "client-id-tag" }),
+    });
+    expect(res.status).toBe(201);
+    expect((await res.json()).tag.id).toBe(id);
+  });
+
+  it("POST retried with the same client-supplied id (and same name) returns the same row, not a duplicate", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const id = randomUUID();
+    const body = JSON.stringify({ id, householdId: house.id, name: "retried-tag" });
+
+    const first = await app.request("/api/tags", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body,
+    });
+    expect(first.status).toBe(201);
+
+    const retry = await app.request("/api/tags", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body,
+    });
+    expect(retry.status).toBe(201);
+    expect((await retry.json()).tag.id).toBe(id);
+
+    const list = await (
+      await app.request(`/api/tags?householdId=${house.id}`, { headers: { cookie } })
+    ).json();
+    expect(list.tags).toHaveLength(1);
+  });
+
+  it("POST without a client-supplied id still server-generates one (backward compatible)", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const created = await addTag(cookie, house.id, "no-client-id");
+    expect(created.status).toBe(201);
+    expect(created.body.tag.id).toBeTruthy();
+  });
+
+  it("two different client-supplied ids racing on the same name still resolve via the existing name-uniqueness fallback (residual documented gap)", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const idA = randomUUID();
+    const idB = randomUUID();
+
+    const first = await app.request("/api/tags", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ id: idA, householdId: house.id, name: "same-name" }),
+    });
+    expect(first.status).toBe(201);
+    expect((await first.json()).tag.id).toBe(idA);
+
+    // A different id, same name: this is NOT a retry of the same create —
+    // it's the documented residual gap (two different local optimistic ids
+    // legitimately colliding on name). The existing get-existing-by-name
+    // fallback wins: the second caller's id is discarded and the FIRST
+    // tag's row is returned instead, with a 200 (not 201) to signal "this
+    // already existed" per the route's original idempotent-get-or-create
+    // contract.
+    const second = await app.request("/api/tags", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ id: idB, householdId: house.id, name: "same-name" }),
+    });
+    expect(second.status).toBe(200);
+    expect((await second.json()).tag.id).toBe(idA);
+
+    const list = await (
+      await app.request(`/api/tags?householdId=${house.id}`, { headers: { cookie } })
+    ).json();
+    expect(list.tags).toHaveLength(1);
+  });
 });

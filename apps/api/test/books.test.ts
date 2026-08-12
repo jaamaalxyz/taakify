@@ -391,4 +391,80 @@ describe("books", () => {
     ).json();
     expect(res.books).toHaveLength(2);
   });
+
+  // --- Client-supplied id + idempotent upsert (fix round) -----------------
+  // repo/books.ts generates a book id (and an edition id, when creating one
+  // inline) client-side for its optimistic local mirror INSERT, then sends
+  // them in the request body so the server row converges on the same id
+  // instead of permanently duplicating once Electric syncs it down.
+
+  it("POST / with a client-supplied id creates the book (and inline edition) under that exact id", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const bookId = randomUUID();
+    const editionId = randomUUID();
+
+    const res = await app.request("/api/books", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        id: bookId,
+        householdId: house.id,
+        edition: { id: editionId, title: "Client Id Book", authors: "A" },
+        ownership: "owned",
+      }),
+    });
+    expect(res.status).toBe(201);
+    const { book } = await res.json();
+    expect(book.id).toBe(bookId);
+    expect(book.edition.id).toBe(editionId);
+    expect(book.edition.title).toBe("Client Id Book");
+  });
+
+  it("POST / retried with the same client-supplied id returns the same row, not a duplicate or a unique-violation", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const bookId = randomUUID();
+    const editionId = randomUUID();
+    const body = JSON.stringify({
+      id: bookId,
+      householdId: house.id,
+      edition: { id: editionId, title: "Retried Book", authors: "A" },
+      ownership: "owned",
+    });
+
+    const first = await app.request("/api/books", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body,
+    });
+    expect(first.status).toBe(201);
+
+    // Simulates the outbox replaying the same POST after a lost response
+    // (e.g. the request succeeded server-side but the client never saw the
+    // 201, so it retries with the exact same body/id).
+    const retry = await app.request("/api/books", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body,
+    });
+    expect(retry.status).toBe(201);
+    const { book: retried } = await retry.json();
+    expect(retried.id).toBe(bookId);
+    expect(retried.edition.id).toBe(editionId);
+
+    const list = await (
+      await app.request(`/api/books?householdId=${house.id}`, { headers: { cookie } })
+    ).json();
+    expect(list.books).toHaveLength(1);
+  });
+
+  it("POST / without a client-supplied id still server-generates one (backward compatible)", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const created = await addBook(cookie, house.id, "No Client Id");
+    expect(created.status).toBe(201);
+    expect(created.body.book.id).toBeTruthy();
+    expect(created.body.book.edition.id).toBeTruthy();
+  });
 });

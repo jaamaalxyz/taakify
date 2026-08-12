@@ -135,4 +135,55 @@ describe("contacts", () => {
     const res = await app.request("/api/contacts?householdId=x");
     expect(res.status).toBe(401);
   });
+
+  // --- Client-supplied id + idempotent upsert (fix round) -----------------
+
+  it("POST with a client-supplied id creates the contact under that exact id", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const id = randomUUID();
+
+    const res = await app.request("/api/contacts", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ id, householdId: house.id, name: "Client Id Contact" }),
+    });
+    expect(res.status).toBe(201);
+    expect((await res.json()).contact.id).toBe(id);
+  });
+
+  it("POST retried with the same client-supplied id returns the same row, not a duplicate", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const id = randomUUID();
+    const body = JSON.stringify({ id, householdId: house.id, name: "Retried Contact" });
+
+    const first = await app.request("/api/contacts", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body,
+    });
+    expect(first.status).toBe(201);
+
+    const retry = await app.request("/api/contacts", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body,
+    });
+    expect(retry.status).toBe(201);
+    expect((await retry.json()).contact.id).toBe(id);
+
+    const list = await (
+      await app.request(`/api/contacts?householdId=${house.id}`, { headers: { cookie } })
+    ).json();
+    expect(list.contacts).toHaveLength(1);
+  });
+
+  it("POST without a client-supplied id still server-generates one (backward compatible)", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const created = await addContact(cookie, house.id, "No Client Id");
+    expect(created.status).toBe(201);
+    expect(created.body.contact.id).toBeTruthy();
+  });
 });

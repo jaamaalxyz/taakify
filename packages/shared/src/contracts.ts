@@ -21,9 +21,18 @@ import type {
 // --- books.ts -----------------------------------------------------------
 
 export interface CreateBookRequest {
+  // Optional client-supplied id for the book row itself — lets an
+  // optimistic local-mirror insert (apps/web/src/lib/repo/books.ts) and the
+  // eventual server row converge on the same id instead of permanently
+  // duplicating once Electric syncs the server's row down. Omit to let the
+  // server generate one, as before.
+  id?: string;
   householdId: string;
   editionId?: string;
   edition?: {
+    // Same client-supplied-id story as the book id above, for the edition
+    // row this request creates inline when editionId is absent.
+    id?: string;
     isbn?: string;
     title: string;
     authors?: string;
@@ -60,6 +69,8 @@ export interface ListBooksResponse {
 // --- shelves.ts / bookcases (mounted in shelves.ts) ---------------------
 
 export interface CreateBookcaseRequest {
+  // See CreateBookRequest.id's comment — same client-supplied-id story.
+  id?: string;
   householdId: string;
   name: string;
 }
@@ -69,6 +80,8 @@ export interface CreateBookcaseResponse {
 }
 
 export interface CreateShelfRequest {
+  // See CreateBookRequest.id's comment — same client-supplied-id story.
+  id?: string;
   label?: string;
 }
 
@@ -88,6 +101,11 @@ export interface UpdateShelfResponse {
 // --- reading-status.ts ----------------------------------------------------
 
 export interface UpsertReadingStatusRequest {
+  // Only meaningful for the FIRST write for a given (book_id, user_id) —
+  // the ON CONFLICT (book_id, user_id) target is the real upsert key for
+  // updates, so this only lets the initial INSERT's id converge with the
+  // optimistic local mirror row's id. See CreateBookRequest.id's comment.
+  id?: string;
   status: ReadingStatus;
   started_at?: string | null;
   finished_at?: string | null;
@@ -106,6 +124,13 @@ export interface ListReadingStatusResponse {
 // --- tags.ts --------------------------------------------------------------
 
 export interface CreateTagRequest {
+  // See CreateBookRequest.id's comment — same client-supplied-id story, but
+  // note the residual gap documented in tags.ts: this only dedupes a retry
+  // of the exact same create (same id). A genuine same-name-different-id
+  // collision (e.g. two members create "sci-fi" independently while
+  // offline) still resolves via the existing get-existing-by-name fallback,
+  // which can't reconcile the loser's local optimistic id.
+  id?: string;
   householdId: string;
   name: string;
 }
@@ -133,6 +158,8 @@ export interface ListBookTagsResponse {
 // --- contacts.ts ----------------------------------------------------------
 
 export interface CreateContactRequest {
+  // See CreateBookRequest.id's comment — same client-supplied-id story.
+  id?: string;
   householdId: string;
   name: string;
   phone?: string;
@@ -156,9 +183,17 @@ export interface ListContactsResponse {
 // --- loans.ts ---------------------------------------------------------
 
 export interface CreateLoanRequest {
+  // See CreateBookRequest.id's comment — same client-supplied-id story, for
+  // the loan row itself.
+  id?: string;
   bookId: string;
   contactId?: string;
   contactName?: string;
+  // id to assign the contact this request creates inline when contactName
+  // (not contactId) is given — distinct from contactId, which always means
+  // "reference an existing contact." Same "inline-created row" client-id
+  // pattern as CreateBookRequest.edition.id.
+  newContactId?: string;
   direction: LoanDirection;
   dueDate?: string;
 }

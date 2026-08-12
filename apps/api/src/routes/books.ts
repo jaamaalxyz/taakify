@@ -83,9 +83,10 @@ books.get("/", async (c) => {
 books.post("/", async (c) => {
   const user = c.get("user");
   const body = await c.req.json<{
+    id?: string;
     householdId: string;
     editionId?: string;
-    edition?: { isbn?: string; title: string; authors?: string; language?: string; cover_url?: string };
+    edition?: { id?: string; isbn?: string; title: string; authors?: string; language?: string; cover_url?: string };
     ownership: Ownership;
     shelf_id?: string;
     do_not_lend?: boolean;
@@ -112,10 +113,19 @@ books.post("/", async (c) => {
 
     let editionId = body.editionId;
     if (!editionId && body.edition) {
+      // Client-supplied id (repo/books.ts's optimistic local edition INSERT
+      // generates one so the mirror row and the server row converge on sync
+      // — see task-6-report.md's "no client-supplied id" gap and its fix).
+      // ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id is a deliberate
+      // no-op (id is the conflict key); its only purpose is making this an
+      // upsert so RETURNING always yields exactly one row whether this is a
+      // fresh insert or a retry of an outbox row that already landed.
       const e = await client.query(
         `INSERT INTO edition (id, isbn, title, authors, language, cover_url)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, isbn, title, authors, language, cover_url`,
-        [randomUUID(), body.edition.isbn ?? null, body.edition.title, body.edition.authors ?? "", body.edition.language ?? null, body.edition.cover_url ?? null]
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
+         RETURNING id, isbn, title, authors, language, cover_url`,
+        [body.edition.id ?? randomUUID(), body.edition.isbn ?? null, body.edition.title, body.edition.authors ?? "", body.edition.language ?? null, body.edition.cover_url ?? null]
       );
       editionId = e.rows[0].id;
     }
@@ -127,10 +137,12 @@ books.post("/", async (c) => {
     if (!editionRows[0]) return null;
     const editionData = editionRows[0];
 
-    const bookId = randomUUID();
+    // Same client-supplied-id + upsert pattern as the edition insert above.
+    const bookId = body.id ?? randomUUID();
     const { rowCount } = await client.query(
       `INSERT INTO book (id, household_id, edition_id, ownership, shelf_id, do_not_lend, wishlist_priority, notes, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id`,
       [bookId, body.householdId, editionId, body.ownership, body.shelf_id ?? null, body.do_not_lend ?? false, body.wishlist_priority ?? null, body.notes ?? null, user.id]
     );
     if (!rowCount) return null;

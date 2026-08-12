@@ -203,4 +203,96 @@ describe("reading status", () => {
     expect(getBody.statuses[0].started_at).toBe(startedAt);
     expect(getBody.statuses[0].finished_at).toBe(finishedAt);
   });
+
+  // --- Client-supplied id + idempotent upsert (fix round) -----------------
+  // Only the true-INSERT branch (this member's first-ever status write for
+  // this book) accepts a client-supplied id — every subsequent write goes
+  // through the existing ON CONFLICT (book_id, user_id) upsert, which
+  // correctly preserves the row's original id regardless of body.id.
+
+  it("PUT with a client-supplied id creates the first-ever status row under that exact id", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const book = await addBook(cookie, house.id, "Sapiens");
+    const id = randomUUID();
+
+    const res = await app.request(`/api/books/${book.id}/status`, {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ id, status: "reading" }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).status.id).toBe(id);
+  });
+
+  it("PUT retried with the same client-supplied id returns the same row, not a duplicate", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const book = await addBook(cookie, house.id, "Sapiens");
+    const id = randomUUID();
+    const body = JSON.stringify({ id, status: "reading" });
+
+    const first = await app.request(`/api/books/${book.id}/status`, {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body,
+    });
+    expect(first.status).toBe(200);
+
+    const retry = await app.request(`/api/books/${book.id}/status`, {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body,
+    });
+    expect(retry.status).toBe(200);
+    expect((await retry.json()).status.id).toBe(id);
+
+    const get = await app.request(`/api/books/${book.id}/status`, { headers: { cookie } });
+    expect((await get.json()).statuses).toHaveLength(1);
+  });
+
+  it("a later update with a DIFFERENT body.id still preserves the row's original id (ON CONFLICT (book_id, user_id) wins)", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const book = await addBook(cookie, house.id, "Sapiens");
+    const originalId = randomUUID();
+
+    const first = await app.request(`/api/books/${book.id}/status`, {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ id: originalId, status: "reading" }),
+    });
+    expect((await first.json()).status.id).toBe(originalId);
+
+    // A second write for the same (book_id, user_id) with an unrelated id —
+    // e.g. a second device's independently-generated local id — must update
+    // the SAME row (matched on book_id+user_id), not create a new one or
+    // change its id.
+    const second = await app.request(`/api/books/${book.id}/status`, {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ id: randomUUID(), status: "finished" }),
+    });
+    expect(second.status).toBe(200);
+    const secondBody = await second.json();
+    expect(secondBody.status.id).toBe(originalId);
+    expect(secondBody.status.status).toBe("finished");
+
+    const get = await app.request(`/api/books/${book.id}/status`, { headers: { cookie } });
+    expect((await get.json()).statuses).toHaveLength(1);
+  });
+
+  it("PUT without a client-supplied id still server-generates one (backward compatible)", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const book = await addBook(cookie, house.id, "Sapiens");
+
+    const res = await app.request(`/api/books/${book.id}/status`, {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ status: "reading" }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).status.id).toBeTruthy();
+  });
 });

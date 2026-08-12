@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { randomUUID } from "node:crypto";
 import { withUser } from "../db/tenant.js";
 import { type SessionUser } from "../middleware/session.js";
 import { dateStr } from "../lib/date.js";
@@ -20,6 +21,7 @@ readingStatus.put("/:bookId/status", async (c) => {
   const user = c.get("user");
   const bookId = c.req.param("bookId");
   const body = await c.req.json<{
+    id?: string;
     status?: string;
     started_at?: string;
     finished_at?: string;
@@ -42,9 +44,16 @@ readingStatus.put("/:bookId/status", async (c) => {
     if (!bookRows[0]) return null;
     const householdId = bookRows[0].household_id;
 
+    // Client-supplied id only matters for the true-INSERT branch (a
+    // household member's very first status write for this book) — the
+    // ON CONFLICT (book_id, user_id) target below is the real upsert key
+    // for every subsequent write, and correctly preserves the existing
+    // row's id (the `id` column isn't part of the SET clause) regardless
+    // of what body.id happens to be on an update. See books.ts's POST /
+    // for the general client-supplied-id rationale.
     const { rows } = await client.query(
-      `INSERT INTO reading_status (household_id, book_id, user_id, status, started_at, finished_at, rating, review_note)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO reading_status (id, household_id, book_id, user_id, status, started_at, finished_at, rating, review_note)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (book_id, user_id) WHERE deleted_at IS NULL DO UPDATE
          SET status = EXCLUDED.status,
              started_at = EXCLUDED.started_at,
@@ -54,6 +63,7 @@ readingStatus.put("/:bookId/status", async (c) => {
              updated_at = now()
        RETURNING id, book_id, user_id, status, started_at, finished_at, rating, review_note, updated_at`,
       [
+        body.id ?? randomUUID(),
         householdId,
         bookId,
         user.id,
