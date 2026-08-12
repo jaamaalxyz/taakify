@@ -3,10 +3,40 @@ import { NavLink, Outlet } from "react-router-dom";
 import { Library, Plus, HandCoins, User, LogOut } from "lucide-react";
 import { authClient } from "../lib/auth.js";
 import { HouseholdProvider, useHousehold } from "../lib/household-context.js";
+import { db, IDB_DATABASE_NAME } from "../lib/db/pglite.js";
 import { getSynced, onSyncedChange, startSync } from "../lib/sync/shape.js";
+import { flush } from "../lib/sync/outbox.js";
+import { useSyncStatus } from "../lib/sync/use-sync-status.js";
+import { Alert, AlertDescription } from "./ui/alert.js";
 import { Button } from "./ui/button.js";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
 import { Skeleton } from "./ui/skeleton.js";
+import { SyncBadge } from "./SyncBadge.js";
 import { cn } from "../lib/utils.js";
+
+// Best-effort flush timeout before sign-out proceeds regardless -- long
+// enough to let a healthy connection actually send the queued requests, but
+// short enough not to hang the sign-out button indefinitely on a dead
+// network (flush() itself has no timeout; it just gives up retrying until
+// the next backoff window).
+const SIGN_OUT_FLUSH_TIMEOUT_MS = 2000;
+
+// Sign-out sequence shared by every path that actually proceeds (empty
+// outbox / dead-only outbox / confirmed-despite-pending-writes): flush
+// best-effort, close the PGlite connection, delete its IndexedDB database
+// (so a shared device never leaks the previous household's local mirror --
+// see IDB_DATABASE_NAME's comment for why the literal dataDir string
+// wouldn't work here), sign out, then reload to a clean slate. Order
+// matters: data must be cleared before the session is dropped, and nothing
+// here runs unless the caller has already decided sign-out should proceed.
+async function performSignOut(): Promise<void> {
+  if (navigator.onLine) {
+    await Promise.race([flush(), new Promise<void>((resolve) => setTimeout(resolve, SIGN_OUT_FLUSH_TIMEOUT_MS))]);
+  }
+  await db.close();
+  indexedDB.deleteDatabase(IDB_DATABASE_NAME);
+  await authClient.signOut().finally(() => location.reload());
+}
 
 function TabLink({ to, label, icon: Icon }: { to: string; label: string; icon: typeof Library }) {
   return (
@@ -25,17 +55,57 @@ function TabLink({ to, label, icon: Icon }: { to: string; label: string; icon: t
 
 function AppHeader() {
   const { household } = useHousehold();
+  const { pending } = useSyncStatus();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  function handleSignOutClick() {
+    // Case 1 (no pending writes, whether the outbox is empty or only holds
+    // dead-lettered/dismissed rows) -> no friction, sign out immediately.
+    // Case 2 (pending writes exist) -> warn first; performSignOut only runs
+    // if the user confirms.
+    if (pending === 0) {
+      void performSignOut();
+    } else {
+      setConfirmOpen(true);
+    }
+  }
+
   return (
-    <header className="flex items-center justify-between border-b p-4">
-      <h1 className="text-lg font-semibold">{household.name}</h1>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Sign out"
-        onClick={() => authClient.signOut().finally(() => location.reload())}
-      >
+    <header className="flex items-center justify-between gap-3 border-b p-4">
+      <div className="flex min-w-0 items-center gap-2">
+        <h1 className="truncate text-lg font-semibold">{household.name}</h1>
+        <SyncBadge />
+      </div>
+      <Button variant="ghost" size="icon" aria-label="Sign out" onClick={handleSignOutClick}>
         <LogOut className="h-4 w-4" />
       </Button>
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Sign out?</DialogTitle>
+          </DialogHeader>
+          <Alert variant="destructive">
+            <AlertDescription>
+              You have {pending} unsaved change{pending === 1 ? "" : "s"}. Sign out anyway? They&rsquo;ll be lost.
+            </AlertDescription>
+          </Alert>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setConfirmOpen(false);
+                void performSignOut();
+              }}
+            >
+              Sign out anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </header>
   );
 }

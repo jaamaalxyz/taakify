@@ -17,3 +17,19 @@ export const db = new PGlite({ dataDir: "idb://taakify" });
 export const ready: Promise<void> = db.waitReady.then(async () => {
   await db.exec(mirrorSchema);
 });
+
+// The real browser-level IndexedDB database name PGlite creates for
+// `dataDir: "idb://taakify"` above -- NOT the literal string "taakify".
+// Traced through @electric-sql/pglite@0.5.4's bundled source
+// (dist/index.js): `idb://taakify` is parsed into `fsType: "idbfs"` with
+// `dataDir` stripped down to `"taakify"`, which the idbfs backend then
+// mounts into its emscripten filesystem at `${PGLITE_ROOT}/${dataDir}`
+// (`PGLITE_ROOT` is the bundle-internal constant `"/pglite"`), i.e.
+// `"/pglite/taakify"`. `IDBFS.getDB(mount.mountpoint, ...)` opens the
+// *browser's* IndexedDB database keyed by that full mount path, not by the
+// bare dataDir string -- so `indexedDB.deleteDatabase("taakify")` would
+// silently target a database that never existed (deleteDatabase on a
+// nonexistent name resolves without error) and leave the real data behind.
+// Task 7's sign-out flow (AppShell.tsx) must delete this exact name so a
+// shared device doesn't leak the previous household's local mirror.
+export const IDB_DATABASE_NAME = "/pglite/taakify";

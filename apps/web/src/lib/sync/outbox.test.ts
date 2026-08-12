@@ -30,6 +30,11 @@ import {
   enqueue,
   flush,
   retry,
+  dismiss,
+  listDeadLettered,
+  countPending,
+  countDead,
+  onOutboxChange,
   describeOperation,
   startOutboxWorker,
   __resetOutboxWorkerForTests,
@@ -306,6 +311,108 @@ describe("describeOperation", () => {
 
   it("returns undefined for an unrecognized endpoint (generic toast fallback)", () => {
     expect(describeOperation("/api/unknown-thing", "POST", {})).toBeUndefined();
+  });
+});
+
+describe("dismiss / listDeadLettered / counts (Task 7)", () => {
+  async function deadLetterOne(endpoint: string, method: string, body?: unknown) {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+    vi.stubGlobal("fetch", fetchMock);
+    const id = await enqueue(endpoint, method, body);
+    await flush();
+    for (let i = 0; i < BACKOFF_SCHEDULE_MS.length - 1; i++) {
+      await vi.advanceTimersByTimeAsync(BACKOFF_SCHEDULE_MS[i] + 1);
+      await flush();
+    }
+    vi.useRealTimers();
+    return id;
+  }
+
+  it("countPending counts only status = 'pending' rows, not dismissed ones", async () => {
+    await enqueue("/api/contacts", "POST", { name: "Alex" });
+    const dismissedId = await enqueue("/api/tags", "POST", { name: "history" });
+    await dismiss(dismissedId);
+
+    expect(await countPending()).toBe(1);
+  });
+
+  it("countDead counts status = 'dead' rows", async () => {
+    expect(await countDead()).toBe(0);
+    await deadLetterOne("/api/loans/loan-1", "PATCH", { returned_date: "2026-01-01" });
+    expect(await countDead()).toBe(1);
+  });
+
+  it("listDeadLettered returns dead rows (with enough fields for describeOperation) but excludes dismissed ones", async () => {
+    const deadId = await deadLetterOne("/api/loans/loan-1", "PATCH", { returned_date: "2026-01-01" });
+    const dismissedId = await enqueue("/api/tags", "POST", { name: "history" });
+    await dismiss(dismissedId);
+
+    const rows = await listDeadLettered();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(deadId);
+    expect(describeOperation(rows[0].endpoint, rows[0].method, rows[0].body)).toBe("mark loan returned");
+  });
+
+  it("dismiss sets status to 'dismissed', which flush() never picks up again", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    const id = await enqueue("/api/tags", "POST", { name: "history" });
+
+    await dismiss(id);
+    const { rows } = await db.query<{ status: string }>(`SELECT status FROM outbox WHERE id = $1`, [id]);
+    expect(rows[0].status).toBe("dismissed");
+
+    await flush();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("retry() flips a dead row's status back to 'pending' (verified against real PGlite, not a mock)", async () => {
+    const id = await deadLetterOne("/api/tags", "POST", { name: "sci-fi" });
+    const { rows: before } = await db.query<{ status: string }>(`SELECT status FROM outbox WHERE id = $1`, [id]);
+    expect(before[0].status).toBe("dead");
+
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+    vi.stubGlobal("fetch", fetchMock);
+    await retry(id);
+
+    // retry() also flushes immediately; with a still-failing fetch the row
+    // is re-armed as 'pending' (not re-dead-lettered, since attempts reset
+    // to 0 then increments to 1 on this single failed attempt).
+    const { rows: after } = await db.query<{ status: string; attempts: number }>(
+      `SELECT status, attempts FROM outbox WHERE id = $1`,
+      [id]
+    );
+    expect(after[0].status).toBe("pending");
+    expect(after[0].attempts).toBe(1);
+  });
+
+  it("onOutboxChange fires on enqueue, dead-lettering, retry, and dismiss", async () => {
+    const listener = vi.fn();
+    const unsubscribe = onOutboxChange(listener);
+
+    await enqueue("/api/tags", "POST", { name: "history" });
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    const deadId = await deadLetterOne("/api/loans/loan-1", "PATCH", { returned_date: "2026-01-01" });
+    expect(listener.mock.calls.length).toBeGreaterThan(1);
+
+    listener.mockClear();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    await retry(deadId);
+    expect(listener).toHaveBeenCalled();
+
+    listener.mockClear();
+    const id2 = await enqueue("/api/tags", "POST", { name: "romance" });
+    listener.mockClear();
+    await dismiss(id2);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    unsubscribe();
+    listener.mockClear();
+    await enqueue("/api/tags", "POST", { name: "poetry" });
+    expect(listener).not.toHaveBeenCalled();
   });
 });
 

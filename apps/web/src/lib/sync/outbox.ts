@@ -42,7 +42,7 @@ export type OptimisticWrite = {
   params?: unknown[];
 };
 
-type OutboxRow = {
+export type OutboxRow = {
   id: string;
   endpoint: string;
   method: string;
@@ -50,6 +50,27 @@ type OutboxRow = {
   attempts: number;
   next_retry_at: string | null;
 };
+
+// --- Change notification ---------------------------------------------------
+//
+// Task 7's `use-sync-status.ts` hook and `SyncBadge` need to know when the
+// outbox's pending/dead counts change, to re-render the sync status UI
+// without polling. Every mutation point below (enqueue, flushRow's three
+// outcomes, retry, dismiss) calls `notifyOutboxChange()` after committing,
+// matching shape.ts's `onSyncedChange` observable pattern (Task 4) rather
+// than introducing a second, different notification style. A plain
+// listener set (not a value-carrying event) is enough -- callers just
+// requery the counts/rows they care about, same as `onSyncedChange`.
+const outboxListeners = new Set<() => void>();
+
+function notifyOutboxChange(): void {
+  for (const listener of outboxListeners) listener();
+}
+
+export function onOutboxChange(callback: () => void): () => void {
+  outboxListeners.add(callback);
+  return () => outboxListeners.delete(callback);
+}
 
 /**
  * Queue a write for the real API and, optionally, apply an optimistic
@@ -87,6 +108,7 @@ export async function enqueue(
     }
   });
 
+  notifyOutboxChange();
   return id;
 }
 
@@ -139,6 +161,7 @@ async function flushRow(row: OutboxRow): Promise<void> {
 
   if (ok) {
     await db.query(`DELETE FROM outbox WHERE id = $1`, [row.id]);
+    notifyOutboxChange();
     return;
   }
 
@@ -149,6 +172,7 @@ async function flushRow(row: OutboxRow): Promise<void> {
       attempts,
     ]);
     fireDeadLetterToast({ ...row, attempts });
+    notifyOutboxChange();
     return;
   }
 
@@ -159,6 +183,7 @@ async function flushRow(row: OutboxRow): Promise<void> {
     attempts,
     nextRetryAt,
   ]);
+  notifyOutboxChange();
 }
 
 // jsonb columns generally round-trip as parsed objects through PGlite's
@@ -207,7 +232,57 @@ function fireDeadLetterToast(row: OutboxRow): void {
 export async function retry(id: string): Promise<void> {
   await ready;
   await db.query(`UPDATE outbox SET attempts = 0, status = 'pending', next_retry_at = NULL WHERE id = $1`, [id]);
+  notifyOutboxChange();
   await flush();
+}
+
+/**
+ * Explicitly abandon a dead-lettered row: mark it `dismissed` rather than
+ * `dead`. `flush()`'s query already filters `WHERE status = 'pending'`, so a
+ * `dismissed` row (like a `dead` one) is never picked up again -- the only
+ * difference is presentational: `listDeadLettered` below deliberately
+ * excludes `dismissed` rows, so dismissing one is what makes it disappear
+ * from the SyncBadge's failed-operations list (Task 7), whereas a `dead` row
+ * stays listed until the user acts on it one way or the other.
+ */
+export async function dismiss(id: string): Promise<void> {
+  await ready;
+  await db.query(`UPDATE outbox SET status = 'dismissed' WHERE id = $1`, [id]);
+  notifyOutboxChange();
+}
+
+/**
+ * Dead-lettered rows only (not `dismissed` ones) -- the list `SyncBadge`
+ * renders in its "Sync issue" dialog, each entry describable via
+ * `describeOperation(endpoint, method, body)`.
+ */
+export async function listDeadLettered(): Promise<OutboxRow[]> {
+  await ready;
+  const { rows } = await db.query<OutboxRow>(
+    `SELECT id, endpoint, method, body, attempts, next_retry_at FROM outbox
+     WHERE status = 'dead'
+     ORDER BY created_at ASC`
+  );
+  return rows;
+}
+
+/**
+ * Count of rows actively queued to retry (`status = 'pending'`) -- this is
+ * deliberately *not* "every non-dead row": a `dismissed` row is something
+ * the user explicitly chose to abandon, so it should not make the SyncBadge
+ * (or the sign-out gate) read "Saving..." / treat it as an unsaved change.
+ */
+export async function countPending(): Promise<number> {
+  await ready;
+  const { rows } = await db.query<{ count: string }>(`SELECT count(*)::text AS count FROM outbox WHERE status = 'pending'`);
+  return Number(rows[0]?.count ?? 0);
+}
+
+/** Count of permanently-failed rows still awaiting a Retry/Dismiss decision. */
+export async function countDead(): Promise<number> {
+  await ready;
+  const { rows } = await db.query<{ count: string }>(`SELECT count(*)::text AS count FROM outbox WHERE status = 'dead'`);
+  return Number(rows[0]?.count ?? 0);
 }
 
 /**

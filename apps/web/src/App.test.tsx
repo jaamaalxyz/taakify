@@ -40,6 +40,17 @@ vi.mock("./lib/sync/shape.js", () => ({
   onSyncedChange: () => () => {},
 }));
 
+// AppShell's header (Task 7) renders SyncBadge and gates sign-out on
+// use-sync-status.js's outbox counts -- both of which read the real PGlite
+// outbox table via db/pglite.js, which is stubbed to `undefined` above.
+// None of the tests in this file exercise sync status or sign-out
+// specifically (see AppShell.test.tsx / SyncBadge.test.tsx for that), so
+// stub the hook to a fixed "all clear" state, purely to avoid an unhandled
+// `db.query` rejection when the header mounts.
+vi.mock("./lib/sync/use-sync-status.js", () => ({
+  useSyncStatus: () => ({ online: true, pending: 0, dead: 0 }),
+}));
+
 const me = {
   user: { id: "u1", email: "a@b.com", name: "Ada" },
   memberships: [{ household_id: "h1", role: "owner", household_name: "Family Library" }],
