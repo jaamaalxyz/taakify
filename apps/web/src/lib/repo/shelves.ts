@@ -1,13 +1,15 @@
 // Bookcases + shelves repo layer — mirrors GET/POST /api/bookcases and
 // POST/PATCH/DELETE /api/shelves in apps/api/src/routes/shelves.ts.
 //
-// See books.ts's header comment for the general "why no client-supplied id"
-// caveat — it applies here too (POST /api/bookcases and POST
-// /api/bookcases/:id/shelves both let the server assign the id; the shelf
-// endpoint also has the server compute `position` as MAX+1, which the
-// optimistic write below approximates locally against the mirror's current
-// rows — a genuine, if rare, race with a concurrent server-side create from
-// another device).
+// createBookcase/createShelf generate the id client-side and send it in the
+// request body (`CreateBookcaseRequest.id`, `CreateShelfRequest.id`) — see
+// books.ts's header comment for the general client-supplied-id rationale.
+// The shelf endpoint also has the server compute `position` as MAX+1, which
+// the optimistic write below approximates locally against the mirror's
+// current rows — a genuine, if rare, race with a concurrent server-side
+// create from another device (unrelated to the id-convergence fix; the
+// server route short-circuits and skips recomputing position on an
+// id-retry, so this race is no worse than it was before).
 import { db, ready } from "../db/pglite.js";
 import { enqueue } from "../sync/outbox.js";
 import type { Bookcase, Shelf } from "@taakify/shared";
@@ -58,7 +60,7 @@ export async function createBookcase(householdId: string, name: string, createdB
   await enqueue(
     "/api/bookcases",
     "POST",
-    { householdId, name },
+    { id, householdId, name },
     {
       sql: `INSERT INTO bookcase (id, household_id, name, created_by, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $5)`,
@@ -86,7 +88,7 @@ export async function createShelf(
   await enqueue(
     `/api/bookcases/${bookcaseId}/shelves`,
     "POST",
-    { label: label || undefined },
+    { id, label: label || undefined },
     {
       sql: `INSERT INTO shelf (id, household_id, bookcase_id, position, label, created_by, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,

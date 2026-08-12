@@ -128,10 +128,11 @@ export interface CreateLoanInput {
   createdBy: string;
 }
 
-// Returns the locally-generated loan id (see books.ts's header comment on
-// the "no client-supplied id" gap — POST /api/loans is the same shape, and
-// so is the inline contact creation this function does when contactName is
-// given instead of contactId).
+// Returns the client-generated loan id, which is also the id the server
+// row will end up with (see books.ts's header comment for the general
+// client-supplied-id rationale). The inline contact creation this function
+// does when contactName is given instead of contactId gets the same
+// treatment via `newContactId` (see the comment above that branch).
 export async function createLoan(input: CreateLoanInput): Promise<string> {
   await ready;
   const { rows: bookRows } = await db.query<{ household_id: string }>(
@@ -141,9 +142,18 @@ export async function createLoan(input: CreateLoanInput): Promise<string> {
   const householdId = bookRows[0]?.household_id ?? null;
 
   let contactId = input.contactId;
+  // When creating a contact inline (contactName, not contactId), generate
+  // its id up front and send it to the server as `newContactId` — distinct
+  // from `contactId`, which always means "reference an existing contact" —
+  // so the server's inline contact INSERT uses the SAME id as this
+  // optimistic local INSERT (see loans.ts's POST / route; fixes the
+  // duplicate-row bug this id would otherwise cause once the real synced
+  // contact row lands under a different id).
+  let newContactId: string | undefined;
   const now = new Date().toISOString();
   if (!contactId && input.contactName) {
-    contactId = crypto.randomUUID();
+    newContactId = crypto.randomUUID();
+    contactId = newContactId;
     await db.query(
       `INSERT INTO contact (id, household_id, name, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
       [contactId, householdId, input.contactName, input.createdBy, now]
@@ -155,9 +165,11 @@ export async function createLoan(input: CreateLoanInput): Promise<string> {
     "/api/loans",
     "POST",
     {
+      id: loanId,
       bookId: input.bookId,
       contactId: input.contactId,
       contactName: input.contactName,
+      newContactId,
       direction: input.direction,
       dueDate: input.dueDate,
     },

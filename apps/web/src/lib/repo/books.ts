@@ -8,16 +8,14 @@
 // nesting (`edition` embedded on each book) — just running against the
 // local mirror tables (mirror-schema.sql) instead of the server's Postgres.
 //
-// Known gap (see task-6-report.md for detail): none of the write endpoints
-// this file targets accept a client-supplied id (CreateBookRequest has no
-// `id` field — apps/api/src/routes/books.ts always calls `crypto.randomUUID()`
-// itself for both the book row and, when needed, a newly-created edition
-// row). So the id used in each optimistic local INSERT below is a
-// local-only id that will differ from the id the server eventually assigns.
-// Once Task 4's shape stream syncs the real server row down, the household
-// will see both the optimistic local row and the real one until a future
-// task reconciles them (out of scope here — Task 5's outbox does not thread
-// the server's response body back to the caller today).
+// createBook/updateBook generate the id(s) client-side and send them in the
+// request body (`CreateBookRequest.id`, `.edition.id`) — apps/api/src/routes/
+// books.ts's POST / uses them (falling back to its own randomUUID() when
+// absent) and upserts on `ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id`,
+// so a retried outbox row and the eventual synced row converge on the same
+// id instead of permanently duplicating. See task-6-report.md's fix-round
+// entry for the full history of why this matters (a real duplicate-row bug
+// this repo layer originally had).
 import { db, ready } from "../db/pglite.js";
 import { enqueue } from "../sync/outbox.js";
 import type { Book, Ownership, WishlistPriority } from "@taakify/shared";
@@ -153,8 +151,9 @@ export interface CreateBookInput {
   createdBy: string;
 }
 
-// Returns the locally-generated book id so callers can navigate to it, etc.
-// (it will NOT match the server's eventual id — see the header comment.)
+// Returns the client-generated book id, which is also the id the server
+// row will end up with (see the header comment) — safe for callers to
+// navigate to immediately.
 export async function createBook(input: CreateBookInput): Promise<string> {
   await ready;
   const bookId = crypto.randomUUID();
@@ -195,33 +194,27 @@ export async function createBook(input: CreateBookInput): Promise<string> {
     ],
   });
 
-  // Multiple statements need to land in one PGlite transaction (the edition
-  // insert must precede the book insert that references it) — enqueue only
-  // takes a single optimistic statement, so run the edition insert directly
-  // first and pass the book insert as the outbox's optimistic write. If the
-  // edition insert succeeds but the process dies before enqueue() runs, the
-  // mirror is left with an orphaned edition row and no outbox entry — a
-  // narrow window, and edition rows are inert (no FK, no cleanup needed), so
-  // this is an acceptable tradeoff rather than a correctness bug.
-  for (const stmt of statements.slice(0, -1)) {
-    await db.query(stmt.sql, stmt.params);
-  }
-  const bookInsert = statements[statements.length - 1];
-
+  // Both statements (the edition insert, when needed, and the book insert
+  // that references it) land atomically with the outbox row: enqueue()
+  // (Task 5, extended for this fix) accepts an array of optimistic writes
+  // applied in order in the same PGlite transaction as the outbox insert,
+  // so there's no crash window between "edition exists locally" and "the
+  // write is queued" anymore.
   await enqueue(
     "/api/books",
     "POST",
     {
+      id: bookId,
       householdId: input.householdId,
       editionId: input.editionId,
-      edition: input.edition,
+      edition: input.edition ? { ...input.edition, id: editionId } : undefined,
       ownership: input.ownership,
       shelf_id: input.shelf_id,
       do_not_lend: input.do_not_lend,
       wishlist_priority: input.wishlist_priority,
       notes: input.notes,
     },
-    { sql: bookInsert.sql, params: bookInsert.params }
+    statements
   );
 
   return bookId;

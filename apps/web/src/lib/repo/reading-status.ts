@@ -50,6 +50,12 @@ export async function upsertMyReadingStatus(
   const rating = input.rating ?? null;
   const reviewNote = input.review_note ?? null;
 
+  // A client-supplied `id` only matters for the true-INSERT branch (this
+  // household member's very first status write for this book) — on the
+  // UPDATE branch the existing row already has its own id, and the
+  // server's ON CONFLICT (book_id, user_id) upsert correctly preserves it
+  // regardless of what id we send, so there's nothing to thread through.
+  const newId = existing[0] ? undefined : crypto.randomUUID();
   const optimistic = existing[0]
     ? {
         sql: `UPDATE reading_status SET status = $2, started_at = $3, finished_at = $4, rating = $5, review_note = $6, updated_at = $7
@@ -60,7 +66,7 @@ export async function upsertMyReadingStatus(
         sql: `INSERT INTO reading_status (id, household_id, book_id, user_id, status, started_at, finished_at, rating, review_note, created_at, updated_at)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
         params: [
-          crypto.randomUUID(),
+          newId,
           householdId,
           bookId,
           userId,
@@ -77,6 +83,7 @@ export async function upsertMyReadingStatus(
     `/api/books/${bookId}/status`,
     "PUT",
     {
+      id: newId,
       status: input.status,
       started_at: input.started_at ?? undefined,
       finished_at: input.finished_at ?? undefined,

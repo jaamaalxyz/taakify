@@ -95,6 +95,42 @@ describe("enqueue", () => {
     const { rows } = await db.query<{ body: unknown }>(`SELECT body FROM outbox WHERE id = $1`, [id]);
     expect(rows[0].body).toEqual({ name: "Alex" });
   });
+
+  it("accepts an array of optimistic writes, applying all of them in order in the same transaction as the outbox insert (fix round: repo/books.ts's createBook needs an edition INSERT before the book INSERT that references it)", async () => {
+    const bookId = "00000000-0000-0000-0000-000000000002";
+    const editionId = "00000000-0000-0000-0000-000000000003";
+
+    await enqueue(
+      "/api/books",
+      "POST",
+      { id: bookId, edition: { id: editionId, title: "Dune" } },
+      [
+        {
+          sql: `INSERT INTO edition (id, title, created_at, updated_at) VALUES ($1, $2, now(), now())`,
+          params: [editionId, "Dune"],
+        },
+        {
+          sql: `INSERT INTO book (id, household_id, edition_id, ownership, created_by, created_at, updated_at)
+                VALUES ($1, $2, $3, 'owned', 'user-1', now(), now())`,
+          params: [bookId, HOUSEHOLD, editionId],
+        },
+      ]
+    );
+
+    const { rows: editionRows } = await db.query<{ id: string; title: string }>(
+      `SELECT id, title FROM edition WHERE id = $1`,
+      [editionId]
+    );
+    expect(editionRows).toHaveLength(1);
+    expect(editionRows[0]).toMatchObject({ title: "Dune" });
+
+    const { rows: bookRows } = await db.query<{ id: string; edition_id: string }>(
+      `SELECT id, edition_id FROM book WHERE id = $1`,
+      [bookId]
+    );
+    expect(bookRows).toHaveLength(1);
+    expect(bookRows[0].edition_id).toBe(editionId);
+  });
 });
 
 describe("flush", () => {

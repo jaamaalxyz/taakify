@@ -7,6 +7,19 @@
 // by checking for an existing (household_id, name) row first — if found, no
 // local write or outbox entry is needed at all, since the tag already
 // exists both locally and (presumably) on the server.
+//
+// findOrCreateTag sends the generated id as `CreateTagRequest.id` (see
+// books.ts's header comment for the general rationale) so a retried outbox
+// row converges on the same tag id server-side. Residual gap: if two
+// different callers race to create a tag with the same name under
+// different ids (e.g. two members, both offline, both add "sci-fi"), the
+// server's existing name-uniqueness fallback (catch 23505 on
+// tag_live_uniq, re-select by name) still wins on the SECOND request that
+// reaches it — but the loser's optimistic local id has no way to be
+// reconciled with the row the server actually kept. This is strictly
+// narrower than the bug this fix round closes (which affected every
+// create, not just same-name races) and is accepted as-is per the reviewed
+// fix design.
 import { db, ready } from "../db/pglite.js";
 import { enqueue } from "../sync/outbox.js";
 import type { Tag } from "@taakify/shared";
@@ -46,7 +59,7 @@ export async function findOrCreateTag(householdId: string, name: string, created
   await enqueue(
     "/api/tags",
     "POST",
-    { householdId, name },
+    { id, householdId, name },
     {
       sql: `INSERT INTO tag (id, household_id, name, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
       params: [id, householdId, name, createdBy, now],

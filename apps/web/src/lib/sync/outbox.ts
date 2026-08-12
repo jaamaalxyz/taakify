@@ -56,6 +56,12 @@ type OutboxRow = {
  * local mutation -- both inside one PGlite transaction, so a crash between
  * the two is impossible (either both happen or neither does).
  *
+ * Accepts either a single `OptimisticWrite` or an array of them, applied in
+ * order in the same transaction as the outbox insert -- e.g.
+ * `repo/books.ts`'s `createBook` needs both an `edition` INSERT and the
+ * `book` INSERT that references it to land atomically with the outbox row
+ * when creating a book with a brand-new edition.
+ *
  * Returns the outbox row's id (useful for tests / callers that want to
  * track the specific write, though most callers won't need it).
  */
@@ -63,10 +69,11 @@ export async function enqueue(
   endpoint: string,
   method: string,
   body?: unknown,
-  optimisticSql?: OptimisticWrite
+  optimisticSql?: OptimisticWrite | OptimisticWrite[]
 ): Promise<string> {
   await ready;
   const id = crypto.randomUUID();
+  const statements = optimisticSql ? (Array.isArray(optimisticSql) ? optimisticSql : [optimisticSql]) : [];
 
   await db.transaction(async (tx) => {
     await tx.query(`INSERT INTO outbox (id, endpoint, method, body) VALUES ($1, $2, $3, $4::jsonb)`, [
@@ -75,8 +82,8 @@ export async function enqueue(
       method,
       body === undefined ? null : JSON.stringify(body),
     ]);
-    if (optimisticSql) {
-      await tx.query(optimisticSql.sql, optimisticSql.params ?? []);
+    for (const stmt of statements) {
+      await tx.query(stmt.sql, stmt.params ?? []);
     }
   });
 

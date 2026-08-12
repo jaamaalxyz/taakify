@@ -22,8 +22,10 @@ export interface CreateContactInput {
   createdBy: string;
 }
 
-// Returns the locally-generated id (see books.ts's header comment on the
-// "no client-supplied id" gap — POST /api/contacts is the same shape).
+// Returns the client-generated id, which is also the id the server row
+// will end up with (see books.ts's header comment for the general
+// client-supplied-id rationale — POST /api/contacts follows the same
+// pattern).
 export async function createContact(input: CreateContactInput): Promise<string> {
   await ready;
   const id = crypto.randomUUID();
@@ -31,7 +33,7 @@ export async function createContact(input: CreateContactInput): Promise<string> 
   await enqueue(
     "/api/contacts",
     "POST",
-    { householdId: input.householdId, name: input.name, phone: input.phone, email: input.email },
+    { id, householdId: input.householdId, name: input.name, phone: input.phone, email: input.email },
     {
       sql: `INSERT INTO contact (id, household_id, name, phone, email, created_by, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
