@@ -4,7 +4,7 @@ import { Library, Plus, HandCoins, User, LogOut } from "lucide-react";
 import { authClient } from "../lib/auth.js";
 import { HouseholdProvider, useHousehold } from "../lib/household-context.js";
 import { db, IDB_DATABASE_NAME } from "../lib/db/pglite.js";
-import { getSynced, onSyncedChange, startSync } from "../lib/sync/shape.js";
+import { bootstrap, getSynced, onSyncedChange, startSync } from "../lib/sync/shape.js";
 import { flush } from "../lib/sync/outbox.js";
 import { useSyncStatus } from "../lib/sync/use-sync-status.js";
 import { Alert, AlertDescription } from "./ui/alert.js";
@@ -131,12 +131,22 @@ function TabBar() {
 // task-4-brief.md Step 3). Every screen under AppShell benefits without any
 // of them needing their own sync-awareness; Task 6's repo layer is what
 // will actually read from the now-populated mirror.
+//
+// `bootstrap()` (Task 8) is fired alongside `startSync`, not after -- it's a
+// one-round-trip seed fetch that can land in the mirror well before any of
+// the 7+ separate shape subscriptions reach their own `up-to-date` control
+// message, so the loading skeleton above is shown for a shorter window (or,
+// on a fast bootstrap response, skipped almost entirely once the shapes
+// catch up moments later). It never blocks `synced`, which still depends
+// only on the shapes' own signal -- see bootstrap()'s doc comment in
+// shape.ts for why a bootstrap failure must stay a non-event here.
 function SyncGate({ children }: { children: React.ReactNode }) {
   const { household } = useHousehold();
   const [synced, setSynced] = useState(getSynced);
 
   useEffect(() => {
     startSync(household.id);
+    void bootstrap(household.id);
     // Reconcile immediately: `synced` may have already flipped true in the
     // window between this component's initial render (which read
     // `getSynced()` for its initial state) and this effect running --

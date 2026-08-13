@@ -246,6 +246,75 @@ export function __totalShapeCountForTests(): number {
   return TOTAL_SHAPE_COUNT;
 }
 
+// --- Cold-start bootstrap seed ---------------------------------------------
+//
+// Fetches the household's full book-domain dataset from the server (Task
+// 8's GET /api/bootstrap) and upserts every row straight into the PGlite
+// mirror, so a slow initial Electric shape catch-up never shows an empty
+// library. Purely an accelerant: it shares the exact same
+// `INSERT ... ON CONFLICT (id) DO UPDATE ... WHERE EXCLUDED.updated_at >
+// table.updated_at` upsert `applyChangeTo` already uses for shape-stream
+// rows (same server-assigned row ids per Task 6's fix), so a bootstrap-seeded
+// row and a later shape-synced row for the same id never conflict or
+// duplicate -- whichever write has the newer `updated_at` wins.
+//
+// Response keys -> mirror table names. `book_tag` is intentionally not
+// seeded here (not part of the bootstrap payload); it catches up via its own
+// shape subscription like every other table not listed here.
+const BOOTSTRAP_COLLECTIONS: Record<string, TenantTable | "edition"> = {
+  bookcases: "bookcase",
+  shelves: "shelf",
+  books: "book",
+  reading_statuses: "reading_status",
+  tags: "tag",
+  contacts: "contact",
+  loans: "loan",
+  editions: "edition",
+};
+
+/**
+ * Fetch the bootstrap payload and apply it to `database`. Exported
+ * standalone (mirroring the applyChangeTo/applyChange split above) so unit
+ * tests can drive it against their own in-memory PGlite instance -- no
+ * browser idb:// storage or real fetch/network required, `fetch` alone is
+ * mocked. Throws on any failure (network, non-2xx, bad JSON); `bootstrap`
+ * below is the version real callers use, which swallows those.
+ */
+export async function bootstrapInto(database: PGlite, householdId: string): Promise<void> {
+  const res = await fetch(`/api/bootstrap?householdId=${householdId}`, {
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(`bootstrap fetch failed with status ${res.status}`);
+  const data = (await res.json()) as Record<string, Row[] | undefined>;
+
+  for (const [key, table] of Object.entries(BOOTSTRAP_COLLECTIONS)) {
+    const rows = data[key];
+    if (!rows) continue;
+    for (const row of rows) {
+      await applyChangeTo(database, table, "insert", row);
+    }
+  }
+}
+
+/**
+ * Seed the local (singleton, `idb://`-backed) PGlite mirror from the
+ * server's one-round-trip bootstrap endpoint. Never throws: a network
+ * failure (or any other error) is logged and swallowed so the shape stream
+ * remains the sole source of truth for `synced` -- bootstrap failing must
+ * never block the app from becoming usable, it only means the cold-start UI
+ * stays on the loading skeleton a bit longer while the shapes catch up on
+ * their own.
+ */
+export async function bootstrap(householdId: string): Promise<void> {
+  try {
+    await ready;
+    await bootstrapInto(db, householdId);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("[sync] bootstrap seed failed; relying on shape stream catch-up instead", error);
+  }
+}
+
 // --- Subscription entry point ---------------------------------------------
 
 let started = false;

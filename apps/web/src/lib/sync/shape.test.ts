@@ -15,6 +15,7 @@ vi.mock("../db/pglite.js", () => ({
 
 import {
   applyChangeTo,
+  bootstrapInto,
   getSynced,
   onSyncedChange,
   __resetSyncedForTests,
@@ -108,6 +109,105 @@ describe("applyChangeTo", () => {
     const { rows } = await db.query<{ title: string }>(`SELECT title FROM edition WHERE id = $1`, [edition.id]);
     expect(rows).toHaveLength(1);
     expect(rows[0].title).toBe("A Book");
+  });
+});
+
+describe("bootstrapInto (Task 8 cold-start seed)", () => {
+  const bootstrapDb = new PGlite();
+
+  beforeAll(async () => {
+    await bootstrapDb.exec(mirrorSchema);
+  });
+
+  afterAll(async () => {
+    await bootstrapDb.close();
+  });
+
+  it("fetches /api/bootstrap and upserts every collection into its mirror table", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        bookcases: [bookcase({ id: "10000000-0000-0000-0000-000000000001" })],
+        editions: [
+          {
+            id: "10000000-0000-0000-0000-000000000002",
+            isbn: null,
+            title: "Bootstrapped Book",
+            authors: "Someone",
+            language: null,
+            publisher: null,
+            published_year: null,
+            cover_url: null,
+            series_name: null,
+            series_number: null,
+            created_at: "2026-01-01T00:00:00.000Z",
+            updated_at: "2026-01-01T00:00:00.000Z",
+            deleted_at: null,
+          },
+        ],
+        // shelves/books/reading_statuses/tags/contacts/loans intentionally
+        // omitted from this fixture to exercise the "missing key" no-op path.
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await bootstrapInto(bootstrapDb, "household-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bootstrap?householdId=household-1",
+      expect.objectContaining({ credentials: "include" })
+    );
+
+    const { rows: bookcaseRows } = await bootstrapDb.query(
+      `SELECT name FROM bookcase WHERE id = $1`,
+      ["10000000-0000-0000-0000-000000000001"]
+    );
+    expect(bookcaseRows).toHaveLength(1);
+
+    const { rows: editionRows } = await bootstrapDb.query<{ title: string }>(
+      `SELECT title FROM edition WHERE id = $1`,
+      ["10000000-0000-0000-0000-000000000002"]
+    );
+    expect(editionRows[0].title).toBe("Bootstrapped Book");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("throws on a non-2xx response (bootstrap(), not bootstrapInto(), is responsible for swallowing)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 500 }));
+
+    await expect(bootstrapInto(bootstrapDb, "household-1")).rejects.toThrow(/status 500/);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("a bootstrap-seeded row never clobbers a newer row already in the mirror (same upsert guard as applyChangeTo)", async () => {
+    const id = "10000000-0000-0000-0000-000000000003";
+    // Simulate the shape stream having already landed a newer row for this
+    // id (e.g. bootstrap's fetch was slow and a live update arrived first).
+    await applyChangeTo(
+      bootstrapDb,
+      "bookcase",
+      "insert",
+      bookcase({ id, name: "Already Synced", updated_at: "2026-02-01T00:00:00.000Z" })
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          bookcases: [bookcase({ id, name: "Stale Bootstrap Row", updated_at: "2026-01-01T00:00:00.000Z" })],
+        }),
+      })
+    );
+
+    await bootstrapInto(bootstrapDb, "household-1");
+
+    const { rows } = await bootstrapDb.query<{ name: string }>(`SELECT name FROM bookcase WHERE id = $1`, [id]);
+    expect(rows[0].name).toBe("Already Synced");
+
+    vi.unstubAllGlobals();
   });
 });
 

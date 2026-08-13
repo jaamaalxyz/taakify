@@ -6,6 +6,7 @@ import { api } from "../lib/api.js";
 import { authClient } from "../lib/auth.js";
 import { db } from "../lib/db/pglite.js";
 import { flush } from "../lib/sync/outbox.js";
+import { startSync, bootstrap } from "../lib/sync/shape.js";
 
 vi.mock("../lib/auth.js", () => ({
   authClient: { signOut: vi.fn().mockResolvedValue(undefined) },
@@ -49,6 +50,7 @@ const syncState = vi.hoisted(() => ({
 
 vi.mock("../lib/sync/shape.js", () => ({
   startSync: vi.fn(),
+  bootstrap: vi.fn().mockResolvedValue(undefined),
   getSynced: () => syncState.synced,
   onSyncedChange: (cb: () => void) => {
     syncState.listeners.add(cb);
@@ -106,6 +108,14 @@ describe("AppShell sync gate", () => {
     await waitFor(() => expect(document.querySelector(".animate-pulse")).toBeInTheDocument());
     expect(screen.queryByRole("heading", { name: "Library" })).not.toBeInTheDocument();
     expect(screen.queryByText("Family Library")).not.toBeInTheDocument();
+  });
+
+  it("fires bootstrap() alongside startSync() for the cold-start household, not after synced (Task 8)", async () => {
+    renderShell();
+    await waitFor(() => expect(document.querySelector(".animate-pulse")).toBeInTheDocument());
+
+    expect(startSync).toHaveBeenCalledWith("h1");
+    expect(bootstrap).toHaveBeenCalledWith("h1");
   });
 
   it("renders the route content and header once synced flips true", async () => {

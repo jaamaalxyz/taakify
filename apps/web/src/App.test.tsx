@@ -36,6 +36,7 @@ vi.mock("./lib/repo/tags.js", () => ({ listTags: vi.fn().mockResolvedValue([]) }
 // loading-state behavior is covered separately in AppShell.test.tsx.
 vi.mock("./lib/sync/shape.js", () => ({
   startSync: vi.fn(),
+  bootstrap: vi.fn().mockResolvedValue(undefined),
   getSynced: () => true,
   onSyncedChange: () => () => {},
 }));
