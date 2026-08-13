@@ -13,8 +13,9 @@ Plans: `docs/superpowers/plans/`
 
 Stack: React + Vite PWA · PGlite (in-browser Postgres) · ElectricSQL (sync) ·
 Hono API · better-auth (email/password + Google) · Postgres · Docker Compose.
-PGlite/ElectricSQL sync is not wired up in the API yet (plan 1 = foundation:
-auth, households, invites, RLS).
+Sync is fully wired up (Plan 3): every book-domain screen reads/writes
+against a PGlite mirror kept live by an Electric shape stream, with offline
+writes queued in a client outbox — see "### Local-first sync" below.
 
 pnpm workspace: `apps/api` (`@taakify/api`), `apps/web` (`@taakify/web`).
 
@@ -146,4 +147,46 @@ Plain React Router v4-style route table in `App.tsx`, gated on
 `authClient.useSession()` (better-auth's React client). No global state
 library or data-fetching library yet — `lib/api.ts`'s `api()` helper is a
 thin `fetch` wrapper (always `credentials: "include"`, throws on non-2xx
-using the JSON `error` field if present).
+using the JSON `error` field if present). `api()` is now only for
+auth/household/invite calls; book-domain screens go through the repo layer
+below instead.
+
+### Local-first sync
+
+- `apps/web/src/lib/db/pglite.ts` — a singleton `PGlite` instance persisted
+  to IndexedDB (`dataDir: "idb://taakify"`), with its schema applied from
+  `mirror-schema.sql` on first use. Its `ready` promise covers both process
+  startup and schema application; every repo/sync function awaits it before
+  querying. `IDB_DATABASE_NAME` records the real underlying IndexedDB
+  database name (`/pglite/taakify`, not `"taakify"`) so sign-out can delete
+  it precisely.
+- `apps/web/src/lib/sync/shape.ts` — one Electric `ShapeStream` per
+  household-scoped mirror table (`bookcase`, `shelf`, `book`,
+  `reading_status`, `tag`, `book_tag`, `contact`, `loan`) plus one for the
+  global `edition` catalog, each applying incoming changes into PGlite with
+  last-write-wins on `updated_at`. Framework-agnostic (no React), driven
+  from an effect in `AppShell.tsx`.
+- `apps/web/src/lib/sync/outbox.ts` — the offline write queue. `enqueue()`
+  records the HTTP request to replay (endpoint/method/body) in an `outbox`
+  mirror table and applies an optimistic write to the relevant mirror
+  table, atomically, in one PGlite transaction. `flush()` replays due rows
+  against the real API with exponential backoff
+  (`BACKOFF_SCHEDULE_MS = [1s, 2s, 5s, 15s, 60s]`); a row that exhausts the
+  schedule is dead-lettered (`status = 'dead'`) and surfaced via a toast
+  with Retry, never silently dropped. Retries also resume on the browser's
+  `online` event and a periodic timer (`startOutboxWorker`).
+- `apps/web/src/lib/repo/` (`books.ts`, `shelves.ts`, `tags.ts`,
+  `contacts.ts`, `loans.ts`, `reading-status.ts`) — the layer screens call
+  instead of `api()` for tenant data: reads run SQL directly against the
+  PGlite mirror (mirroring the corresponding `apps/api/src/routes/*.ts`
+  query, filters, and joins), writes call `enqueue()`. Mutating repo
+  functions generate row ids client-side and pass them through in the
+  outbox request body; the API's `POST` handlers upsert on
+  `ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id` so a retried outbox row
+  and the eventual synced row converge on one id instead of duplicating.
+- `apps/api/src/routes/bootstrap.ts` — cold-start seeding endpoint. Column
+  lists there mirror `mirror-schema.sql` (and, in turn, `shape.ts`'s
+  `COLUMNS`) exactly, returning flat per-table rows (not the nested
+  book+edition/loan+book+contact envelopes the list/detail routes return)
+  so the web side can upsert them straight into the matching mirror table
+  on first load, before the shape stream has caught up.
