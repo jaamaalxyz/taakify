@@ -11,6 +11,7 @@ import { readingStatus } from "./routes/reading-status.js";
 import { tags, bookTags } from "./routes/tags.js";
 import { contacts } from "./routes/contacts.js";
 import { loans } from "./routes/loans.js";
+import { bootstrap } from "./routes/bootstrap.js";
 
 export const app = new Hono();
 
@@ -53,3 +54,4 @@ app.route("/api/tags", tags);
 app.route("/api/books", bookTags);
 app.route("/api/contacts", contacts);
 app.route("/api/loans", loans);
+app.route("/api/bootstrap", bootstrap);
