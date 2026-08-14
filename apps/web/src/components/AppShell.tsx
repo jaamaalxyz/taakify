@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { Library, Plus, HandCoins, User, LogOut } from "lucide-react";
+import { toast } from "sonner";
 import { authClient } from "../lib/auth.js";
 import { HouseholdProvider, useHousehold } from "../lib/household-context.js";
 import { db, IDB_DATABASE_NAME, ready } from "../lib/db/pglite.js";
+import { getMultiTabDetected, onMultiTabChange, startMultiTabGuard } from "../lib/db/multi-tab-guard.js";
 import {
   bootstrap,
   getSynced,
@@ -284,7 +286,30 @@ function SyncGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// Important 5 (final whole-branch review): pglite.ts opens PGlite directly
+// against an idb://-backed dataDir, which @electric-sql/pglite documents as
+// unsupported for concurrent multi-tab access without a full PGliteWorker
+// migration (see multi-tab-guard.ts's header comment for why that full fix
+// is out of scope for this round). This effect starts the lightweight
+// BroadcastChannel handshake once per page load and surfaces a one-time
+// warning toast the moment another tab is detected -- runs at the AppShell
+// level (not inside SyncGate) so it fires regardless of which household is
+// active, and only once regardless of how many times AppShell re-renders
+// (`getMultiTabDetected()` is checked before ever toasting).
+function useMultiTabWarning(): void {
+  useEffect(() => {
+    startMultiTabGuard();
+    if (getMultiTabDetected()) {
+      toast.warning("Taakify is open in another tab — using two tabs at once may cause sync issues.");
+    }
+    return onMultiTabChange(() => {
+      toast.warning("Taakify is open in another tab — using two tabs at once may cause sync issues.");
+    });
+  }, []);
+}
+
 export function AppShell() {
+  useMultiTabWarning();
   return (
     <HouseholdProvider>
       <SyncGate>
