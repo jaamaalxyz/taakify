@@ -133,6 +133,15 @@ export interface CreateLoanInput {
 // client-supplied-id rationale). The inline contact creation this function
 // does when contactName is given instead of contactId gets the same
 // treatment via `newContactId` (see the comment above that branch).
+//
+// Both the inline contact INSERT (when needed) and the loan INSERT that
+// references it are collected into `statements` and passed to a single
+// enqueue() call, so they land atomically with the outbox row in one PGlite
+// transaction — same fix as createBook's edition INSERT (books.ts). Before
+// this fix, the contact INSERT ran as a bare, separate `db.query()` call
+// before enqueue() was even invoked: a crash (or a closed tab) between the
+// two left an orphaned local contact row with no outbox entry ever queued
+// to send it to the server (Important finding, final whole-branch review).
 export async function createLoan(input: CreateLoanInput): Promise<string> {
   await ready;
   const { rows: bookRows } = await db.query<{ household_id: string }>(
@@ -151,16 +160,23 @@ export async function createLoan(input: CreateLoanInput): Promise<string> {
   // contact row lands under a different id).
   let newContactId: string | undefined;
   const now = new Date().toISOString();
+  const statements: { sql: string; params: unknown[] }[] = [];
   if (!contactId && input.contactName) {
     newContactId = crypto.randomUUID();
     contactId = newContactId;
-    await db.query(
-      `INSERT INTO contact (id, household_id, name, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
-      [contactId, householdId, input.contactName, input.createdBy, now]
-    );
+    statements.push({
+      sql: `INSERT INTO contact (id, household_id, name, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
+      params: [contactId, householdId, input.contactName, input.createdBy, now],
+    });
   }
 
   const loanId = crypto.randomUUID();
+  statements.push({
+    sql: `INSERT INTO loan (id, household_id, book_id, contact_id, direction, out_date, due_date, created_by, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, $6, $7, $8, $8)`,
+    params: [loanId, householdId, input.bookId, contactId, input.direction, input.dueDate ?? null, input.createdBy, now],
+  });
+
   await enqueue(
     "/api/loans",
     "POST",
@@ -173,11 +189,7 @@ export async function createLoan(input: CreateLoanInput): Promise<string> {
       direction: input.direction,
       dueDate: input.dueDate,
     },
-    {
-      sql: `INSERT INTO loan (id, household_id, book_id, contact_id, direction, out_date, due_date, created_by, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, $6, $7, $8, $8)`,
-      params: [loanId, householdId, input.bookId, contactId, input.direction, input.dueDate ?? null, input.createdBy, now],
-    }
+    statements
   );
   return loanId;
 }

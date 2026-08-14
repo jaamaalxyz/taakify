@@ -113,7 +113,17 @@ beforeEach(() => {
   vi.mocked(authClient.signOut).mockClear();
   vi.mocked(db.close).mockClear();
   vi.mocked(flush).mockClear();
-  vi.stubGlobal("indexedDB", { deleteDatabase: vi.fn() });
+  // performSignOut (Important 2 fix) now wraps indexedDB.deleteDatabase in
+  // a Promise and awaits its onsuccess -- the mock needs to actually fire
+  // that callback (asynchronously, like the real IndexedDB API) rather than
+  // just being a bare vi.fn(), or `await deleteIndexedDb(...)` would hang.
+  vi.stubGlobal("indexedDB", {
+    deleteDatabase: vi.fn(() => {
+      const request: { onsuccess?: () => void; onerror?: () => void; onblocked?: () => void } = {};
+      setTimeout(() => request.onsuccess?.(), 0);
+      return request;
+    }),
+  });
 });
 
 function renderShell() {
@@ -253,6 +263,47 @@ describe("AppShell sign-out gating (Task 7)", () => {
     expect(flush).toHaveBeenCalled();
     expect(db.close).toHaveBeenCalledTimes(1);
     expect(indexedDB.deleteDatabase).toHaveBeenCalledWith("/pglite/taakify");
+  });
+
+  it("awaits indexedDB.deleteDatabase's onsuccess before signing out (Important 2 fix)", async () => {
+    let resolveDelete: (() => void) | undefined;
+    vi.stubGlobal("indexedDB", {
+      deleteDatabase: vi.fn(() => {
+        const request: { onsuccess?: () => void } = {};
+        // Deliberately never auto-fire onsuccess -- the test controls when
+        // the "delete" completes, so it can assert signOut hasn't been
+        // called yet while it's still pending.
+        resolveDelete = () => request.onsuccess?.();
+        return request;
+      }),
+    });
+    syncStatus.pending = 0;
+    await renderSyncedShell();
+
+    screen.getByRole("button", { name: "Sign out" }).click();
+
+    // Give any (incorrect) fire-and-forget code a chance to race ahead.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(authClient.signOut).not.toHaveBeenCalled();
+
+    resolveDelete?.();
+    await waitFor(() => expect(authClient.signOut).toHaveBeenCalledTimes(1));
+  });
+
+  it("proceeds with sign-out after a grace period when deleteDatabase is blocked by another tab", async () => {
+    vi.stubGlobal("indexedDB", {
+      deleteDatabase: vi.fn(() => {
+        const request: { onblocked?: () => void } = {};
+        setTimeout(() => request.onblocked?.(), 0);
+        return request;
+      }),
+    });
+    syncStatus.pending = 0;
+    await renderSyncedShell();
+
+    screen.getByRole("button", { name: "Sign out" }).click();
+
+    await waitFor(() => expect(authClient.signOut).toHaveBeenCalledTimes(1), { timeout: 3000 });
   });
 
   it("does not attempt to flush when offline (short-circuits the best-effort flush)", async () => {

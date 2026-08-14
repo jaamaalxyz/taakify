@@ -28,6 +28,63 @@ import { cn } from "../lib/utils.js";
 // the next backoff window).
 const SIGN_OUT_FLUSH_TIMEOUT_MS = 2000;
 
+// Best-effort wait for another tab holding the same IndexedDB database open
+// to release it before giving up -- `deleteDatabase`'s request never fires
+// onsuccess/onerror while blocked, it just sits there, so without a timeout
+// a second tab could hang sign-out indefinitely. Short: this is a rare edge
+// case (another tab open to the same household mid-sign-out), and the
+// fallback below still proceeds with the reload/sign-out either way -- it
+// just means that one blocked case couldn't confirm the delete completed.
+const IDB_DELETE_BLOCKED_TIMEOUT_MS = 1000;
+
+// Wraps indexedDB.deleteDatabase in a Promise so callers can actually wait
+// for the delete to finish (Important finding, final whole-branch review):
+// the raw call is fire-and-forget, so `location.reload()` could previously
+// fire before the delete completed, or the delete could silently stall
+// forever in `onblocked` (another tab still has the database open) with no
+// visibility at all. Since this is the branch's stated shared-device
+// privacy guarantee (never leak the previous household's local mirror to
+// the next person who signs in on this device), it needs to actually
+// complete -- or at least be given a real chance to -- before sign-out
+// proceeds to the reload.
+function deleteIndexedDb(name: string): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    function settle() {
+      if (settled) return;
+      settled = true;
+      resolve();
+    }
+
+    let request: IDBOpenDBRequest;
+    try {
+      request = indexedDB.deleteDatabase(name);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("[sign-out] indexedDB.deleteDatabase threw synchronously", error);
+      settle();
+      return;
+    }
+
+    request.onsuccess = () => settle();
+    request.onerror = () => {
+      // eslint-disable-next-line no-console
+      console.error("[sign-out] indexedDB.deleteDatabase failed", request.error);
+      settle();
+    };
+    request.onblocked = () => {
+      // Another tab still has the database open (e.g. a second tab on the
+      // same household). Don't hang the sign-out flow forever waiting for
+      // it to close -- log and give up after a short grace period; the
+      // blocked delete may still complete later once that tab closes, but
+      // this tab's sign-out proceeds regardless.
+      // eslint-disable-next-line no-console
+      console.error("[sign-out] indexedDB.deleteDatabase blocked by another open tab; proceeding anyway");
+      setTimeout(settle, IDB_DELETE_BLOCKED_TIMEOUT_MS);
+    };
+  });
+}
+
 // Sign-out sequence shared by every path that actually proceeds (empty
 // outbox / dead-only outbox / confirmed-despite-pending-writes): flush
 // best-effort, close the PGlite connection, delete its IndexedDB database
@@ -41,7 +98,7 @@ async function performSignOut(): Promise<void> {
     await Promise.race([flush(), new Promise<void>((resolve) => setTimeout(resolve, SIGN_OUT_FLUSH_TIMEOUT_MS))]);
   }
   await db.close();
-  indexedDB.deleteDatabase(IDB_DATABASE_NAME);
+  await deleteIndexedDb(IDB_DATABASE_NAME);
   await authClient.signOut().finally(() => location.reload());
 }
 
