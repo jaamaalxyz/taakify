@@ -12,6 +12,7 @@
 // id-retry, so this race is no worse than it was before).
 import { db, ready } from "../db/pglite.js";
 import { enqueue } from "../sync/outbox.js";
+import { OPTIMISTIC_UPDATED_AT } from "../sync/optimistic-clock.js";
 import type { Bookcase, Shelf } from "@taakify/shared";
 
 type BookcaseShelfRow = {
@@ -63,8 +64,8 @@ export async function createBookcase(householdId: string, name: string, createdB
     { id, householdId, name },
     {
       sql: `INSERT INTO bookcase (id, household_id, name, created_by, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $5)`,
-      params: [id, householdId, name, createdBy, now],
+            VALUES ($1, $2, $3, $4, $5, $6)`,
+      params: [id, householdId, name, createdBy, now, OPTIMISTIC_UPDATED_AT],
     }
   );
   return id;
@@ -91,8 +92,8 @@ export async function createShelf(
     { id, label: label || undefined },
     {
       sql: `INSERT INTO shelf (id, household_id, bookcase_id, position, label, created_by, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
-      params: [id, householdId, bookcaseId, position, label || null, createdBy, now],
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      params: [id, householdId, bookcaseId, position, label || null, createdBy, now, OPTIMISTIC_UPDATED_AT],
     }
   );
   return id;
@@ -118,8 +119,12 @@ export async function updateShelf(shelfId: string, input: UpdateShelfInput): Pro
   }
   if (!sets.length) return;
 
+  // See optimistic-clock.ts — updated_at is a sentinel, not the browser's
+  // clock, so a fast local clock can't cause the LWW guard to reject the
+  // server's real row once this write syncs back down.
+  params.push(OPTIMISTIC_UPDATED_AT);
   await enqueue(`/api/shelves/${shelfId}`, "PATCH", input, {
-    sql: `UPDATE shelf SET ${sets.join(", ")}, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`,
+    sql: `UPDATE shelf SET ${sets.join(", ")}, updated_at = $${i} WHERE id = $1 AND deleted_at IS NULL`,
     params,
   });
 }
@@ -127,8 +132,8 @@ export async function updateShelf(shelfId: string, input: UpdateShelfInput): Pro
 export async function deleteShelf(shelfId: string): Promise<void> {
   await ready;
   await enqueue(`/api/shelves/${shelfId}`, "DELETE", undefined, {
-    sql: `UPDATE shelf SET deleted_at = now(), updated_at = now() WHERE id = $1 AND deleted_at IS NULL`,
-    params: [shelfId],
+    sql: `UPDATE shelf SET deleted_at = now(), updated_at = $2 WHERE id = $1 AND deleted_at IS NULL`,
+    params: [shelfId, OPTIMISTIC_UPDATED_AT],
   });
 }
 

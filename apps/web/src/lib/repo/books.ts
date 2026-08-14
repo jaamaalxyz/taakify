@@ -18,6 +18,7 @@
 // this repo layer originally had).
 import { db, ready } from "../db/pglite.js";
 import { enqueue } from "../sync/outbox.js";
+import { OPTIMISTIC_UPDATED_AT } from "../sync/optimistic-clock.js";
 import type { Book, Ownership, WishlistPriority } from "@taakify/shared";
 
 type BookRow = {
@@ -165,7 +166,7 @@ export async function createBook(input: CreateBookInput): Promise<string> {
     editionId = crypto.randomUUID();
     statements.push({
       sql: `INSERT INTO edition (id, isbn, title, authors, language, cover_url, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       params: [
         editionId,
         input.edition.isbn ?? null,
@@ -174,12 +175,13 @@ export async function createBook(input: CreateBookInput): Promise<string> {
         input.edition.language ?? null,
         input.edition.cover_url ?? null,
         now,
+        OPTIMISTIC_UPDATED_AT,
       ],
     });
   }
   statements.push({
     sql: `INSERT INTO book (id, household_id, edition_id, ownership, shelf_id, do_not_lend, wishlist_priority, notes, created_by, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     params: [
       bookId,
       input.householdId,
@@ -191,6 +193,7 @@ export async function createBook(input: CreateBookInput): Promise<string> {
       input.notes ?? null,
       input.createdBy,
       now,
+      OPTIMISTIC_UPDATED_AT,
     ],
   });
 
@@ -243,8 +246,13 @@ export async function updateBook(bookId: string, input: UpdateBookInput): Promis
   }
   if (!sets.length) return;
 
+  // updated_at is stamped with OPTIMISTIC_UPDATED_AT (not `now()` / the
+  // browser's clock) so a fast local clock can never cause the LWW guard in
+  // shape.ts's applyChangeTo to reject the server's real row once this
+  // write syncs back down — see optimistic-clock.ts.
+  params.push(OPTIMISTIC_UPDATED_AT);
   await enqueue(`/api/books/${bookId}`, "PATCH", input, {
-    sql: `UPDATE book SET ${sets.join(", ")}, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`,
+    sql: `UPDATE book SET ${sets.join(", ")}, updated_at = $${i} WHERE id = $1 AND deleted_at IS NULL`,
     params,
   });
 }
@@ -252,7 +260,7 @@ export async function updateBook(bookId: string, input: UpdateBookInput): Promis
 export async function deleteBook(bookId: string): Promise<void> {
   await ready;
   await enqueue(`/api/books/${bookId}`, "DELETE", undefined, {
-    sql: `UPDATE book SET deleted_at = now(), updated_at = now() WHERE id = $1 AND deleted_at IS NULL`,
-    params: [bookId],
+    sql: `UPDATE book SET deleted_at = now(), updated_at = $2 WHERE id = $1 AND deleted_at IS NULL`,
+    params: [bookId, OPTIMISTIC_UPDATED_AT],
   });
 }

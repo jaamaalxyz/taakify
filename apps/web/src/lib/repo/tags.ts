@@ -22,6 +22,7 @@
 // fix design.
 import { db, ready } from "../db/pglite.js";
 import { enqueue } from "../sync/outbox.js";
+import { OPTIMISTIC_UPDATED_AT } from "../sync/optimistic-clock.js";
 import type { Tag } from "@taakify/shared";
 
 export async function listTags(householdId: string): Promise<Tag[]> {
@@ -61,8 +62,8 @@ export async function findOrCreateTag(householdId: string, name: string, created
     "POST",
     { id, householdId, name },
     {
-      sql: `INSERT INTO tag (id, household_id, name, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
-      params: [id, householdId, name, createdBy, now],
+      sql: `INSERT INTO tag (id, household_id, name, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+      params: [id, householdId, name, createdBy, now, OPTIMISTIC_UPDATED_AT],
     }
   );
   return { id, name, updated_at: now };
@@ -82,8 +83,8 @@ export async function attachBookTag(bookId: string, householdId: string, tagId: 
     // server-side upsert (Critical 3, final review fix round).
     { id, tagId },
     {
-      sql: `INSERT INTO book_tag (id, household_id, book_id, tag_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
-      params: [id, householdId, bookId, tagId, now],
+      sql: `INSERT INTO book_tag (id, household_id, book_id, tag_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+      params: [id, householdId, bookId, tagId, now, OPTIMISTIC_UPDATED_AT],
     }
   );
 }
@@ -91,7 +92,7 @@ export async function attachBookTag(bookId: string, householdId: string, tagId: 
 export async function removeBookTag(bookId: string, tagId: string): Promise<void> {
   await ready;
   await enqueue(`/api/books/${bookId}/tags/${tagId}`, "DELETE", undefined, {
-    sql: `UPDATE book_tag SET deleted_at = now(), updated_at = now() WHERE book_id = $1 AND tag_id = $2 AND deleted_at IS NULL`,
-    params: [bookId, tagId],
+    sql: `UPDATE book_tag SET deleted_at = now(), updated_at = $3 WHERE book_id = $1 AND tag_id = $2 AND deleted_at IS NULL`,
+    params: [bookId, tagId, OPTIMISTIC_UPDATED_AT],
   });
 }

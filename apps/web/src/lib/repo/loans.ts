@@ -3,6 +3,7 @@
 // and the `overdue` computed column.
 import { db, ready } from "../db/pglite.js";
 import { enqueue } from "../sync/outbox.js";
+import { OPTIMISTIC_UPDATED_AT } from "../sync/optimistic-clock.js";
 import type { Loan, LoanDirection, Ownership, WishlistPriority } from "@taakify/shared";
 
 type LoanRow = {
@@ -165,16 +166,26 @@ export async function createLoan(input: CreateLoanInput): Promise<string> {
     newContactId = crypto.randomUUID();
     contactId = newContactId;
     statements.push({
-      sql: `INSERT INTO contact (id, household_id, name, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
-      params: [contactId, householdId, input.contactName, input.createdBy, now],
+      sql: `INSERT INTO contact (id, household_id, name, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+      params: [contactId, householdId, input.contactName, input.createdBy, now, OPTIMISTIC_UPDATED_AT],
     });
   }
 
   const loanId = crypto.randomUUID();
   statements.push({
     sql: `INSERT INTO loan (id, household_id, book_id, contact_id, direction, out_date, due_date, created_by, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, $6, $7, $8, $8)`,
-    params: [loanId, householdId, input.bookId, contactId, input.direction, input.dueDate ?? null, input.createdBy, now],
+          VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, $6, $7, $8, $9)`,
+    params: [
+      loanId,
+      householdId,
+      input.bookId,
+      contactId,
+      input.direction,
+      input.dueDate ?? null,
+      input.createdBy,
+      now,
+      OPTIMISTIC_UPDATED_AT,
+    ],
   });
 
   await enqueue(
@@ -214,8 +225,12 @@ export async function updateLoan(loanId: string, input: UpdateLoanInput): Promis
   }
   if (!sets.length) return;
 
+  // See optimistic-clock.ts — updated_at is a sentinel, not the browser's
+  // clock, so a fast local clock can't cause the LWW guard to reject the
+  // server's real row once this write syncs back down.
+  params.push(OPTIMISTIC_UPDATED_AT);
   await enqueue(`/api/loans/${loanId}`, "PATCH", input, {
-    sql: `UPDATE loan SET ${sets.join(", ")}, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`,
+    sql: `UPDATE loan SET ${sets.join(", ")}, updated_at = $${i} WHERE id = $1 AND deleted_at IS NULL`,
     params,
   });
 }

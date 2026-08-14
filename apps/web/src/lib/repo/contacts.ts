@@ -2,6 +2,7 @@
 // /api/contacts/:id in apps/api/src/routes/contacts.ts.
 import { db, ready } from "../db/pglite.js";
 import { enqueue } from "../sync/outbox.js";
+import { OPTIMISTIC_UPDATED_AT } from "../sync/optimistic-clock.js";
 import type { Contact } from "@taakify/shared";
 
 export async function listContacts(householdId: string): Promise<Contact[]> {
@@ -36,8 +37,17 @@ export async function createContact(input: CreateContactInput): Promise<string> 
     { id, householdId: input.householdId, name: input.name, phone: input.phone, email: input.email },
     {
       sql: `INSERT INTO contact (id, household_id, name, phone, email, created_by, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
-      params: [id, input.householdId, input.name, input.phone ?? null, input.email ?? null, input.createdBy, now],
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      params: [
+        id,
+        input.householdId,
+        input.name,
+        input.phone ?? null,
+        input.email ?? null,
+        input.createdBy,
+        now,
+        OPTIMISTIC_UPDATED_AT,
+      ],
     }
   );
   return id;
@@ -64,8 +74,12 @@ export async function updateContact(contactId: string, input: UpdateContactInput
   }
   if (!sets.length) return;
 
+  // See optimistic-clock.ts — updated_at is a sentinel, not the browser's
+  // clock, so a fast local clock can't cause the LWW guard to reject the
+  // server's real row once this write syncs back down.
+  params.push(OPTIMISTIC_UPDATED_AT);
   await enqueue(`/api/contacts/${contactId}`, "PATCH", input, {
-    sql: `UPDATE contact SET ${sets.join(", ")}, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`,
+    sql: `UPDATE contact SET ${sets.join(", ")}, updated_at = $${i} WHERE id = $1 AND deleted_at IS NULL`,
     params,
   });
 }

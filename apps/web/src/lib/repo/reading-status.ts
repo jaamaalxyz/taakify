@@ -3,6 +3,7 @@
 // (book_id, user_id)).
 import { db, ready } from "../db/pglite.js";
 import { enqueue } from "../sync/outbox.js";
+import { OPTIMISTIC_UPDATED_AT } from "../sync/optimistic-clock.js";
 import type { ReadingStatus, ReadingStatusRow } from "@taakify/shared";
 
 export async function listReadingStatuses(bookId: string): Promise<ReadingStatusRow[]> {
@@ -56,15 +57,19 @@ export async function upsertMyReadingStatus(
   // server's ON CONFLICT (book_id, user_id) upsert correctly preserves it
   // regardless of what id we send, so there's nothing to thread through.
   const newId = existing[0] ? undefined : crypto.randomUUID();
+  // updated_at is stamped with OPTIMISTIC_UPDATED_AT (not "now") in both
+  // branches so a fast local clock can't cause the LWW guard in
+  // shape.ts's applyChangeTo to reject the server's real row once this
+  // write syncs back down — see optimistic-clock.ts.
   const optimistic = existing[0]
     ? {
         sql: `UPDATE reading_status SET status = $2, started_at = $3, finished_at = $4, rating = $5, review_note = $6, updated_at = $7
               WHERE id = $1`,
-        params: [existing[0].id, input.status, startedAt, finishedAt, rating, reviewNote, now],
+        params: [existing[0].id, input.status, startedAt, finishedAt, rating, reviewNote, OPTIMISTIC_UPDATED_AT],
       }
     : {
         sql: `INSERT INTO reading_status (id, household_id, book_id, user_id, status, started_at, finished_at, rating, review_note, created_at, updated_at)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         params: [
           newId,
           householdId,
@@ -76,6 +81,7 @@ export async function upsertMyReadingStatus(
           rating,
           reviewNote,
           now,
+          OPTIMISTIC_UPDATED_AT,
         ],
       };
 
