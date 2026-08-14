@@ -6,6 +6,7 @@ import { useHousehold } from "../lib/household-context.js";
 import { listLoans, createLoan, updateLoan } from "../lib/repo/loans.js";
 import { listContacts, createContact, updateContact } from "../lib/repo/contacts.js";
 import { listBooks } from "../lib/repo/books.js";
+import { onMirrorChange } from "../lib/sync/shape.js";
 import { friendlyError } from "../lib/error-messages.js";
 import { LOAN_DIRECTION_LABELS, type LoanDirection as Direction } from "../lib/labels.js";
 import type { Loan as SharedLoan, Contact as SharedContact } from "@taakify/shared";
@@ -163,12 +164,20 @@ export function Loans() {
       });
   }
 
+  // Bumped whenever the local mirror changes underneath us (a remote edit
+  // streaming in via Electric, or our own optimistic write) -- re-runs the
+  // loaders below so e.g. another household member recording/returning a
+  // loan shows up without a manual navigate-away-and-back (Important
+  // finding, final whole-branch review).
+  const [mirrorTick, setMirrorTick] = useState(0);
+  useEffect(() => onMirrorChange(() => setMirrorTick((t) => t + 1)), []);
+
   useEffect(() => {
     loadLoans();
     loadContacts();
     loadBooks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [household.id]);
+  }, [household.id, mirrorTick]);
 
   async function handleMarkReturned(loanId: string) {
     setActionError("");

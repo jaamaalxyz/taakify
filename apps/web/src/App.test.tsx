@@ -41,6 +41,7 @@ vi.mock("./lib/sync/shape.js", () => ({
   onSyncedChange: () => () => {},
   getSyncStalled: () => false,
   onSyncStalledChange: () => () => {},
+  onMirrorChange: () => () => {},
 }));
 
 // AppShell's header (Task 7) renders SyncBadge and gates sign-out on

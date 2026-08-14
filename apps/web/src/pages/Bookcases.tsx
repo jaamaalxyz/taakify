@@ -3,6 +3,7 @@ import { Library as LibraryIcon, ArrowUp, ArrowDown } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
 import { listBookcases, createBookcase, createShelf, updateShelf } from "../lib/repo/shelves.js";
+import { onMirrorChange } from "../lib/sync/shape.js";
 import type { Bookcase, Shelf } from "@taakify/shared";
 import { friendlyError } from "../lib/error-messages.js";
 import { Skeleton } from "../components/ui/skeleton.js";
@@ -57,10 +58,18 @@ export function Bookcases() {
       .catch((e) => setLoadError(friendlyError(e)));
   }
 
+  // Bumped whenever the local mirror changes underneath us (a remote edit
+  // streaming in via Electric, or our own optimistic write) -- re-runs
+  // loadBookcases so e.g. another household member adding a shelf shows up
+  // without a manual navigate-away-and-back (Important finding, final
+  // whole-branch review).
+  const [mirrorTick, setMirrorTick] = useState(0);
+  useEffect(() => onMirrorChange(() => setMirrorTick((t) => t + 1)), []);
+
   useEffect(() => {
     loadBookcases();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [household.id]);
+  }, [household.id, mirrorTick]);
 
   async function handleAddBookcase(e: FormEvent) {
     e.preventDefault();

@@ -69,6 +69,7 @@ export async function applyChangeTo(
 ): Promise<void> {
   if (operation === "delete") {
     await database.query(`DELETE FROM ${table} WHERE id = $1`, [value.id]);
+    notifyMirrorChange();
     return;
   }
 
@@ -87,6 +88,50 @@ export async function applyChangeTo(
      WHERE EXCLUDED.updated_at > ${table}.updated_at`,
     columns.map((c) => value[c] ?? null)
   );
+  notifyMirrorChange();
+}
+
+// --- Mirror-change notification --------------------------------------------
+//
+// Important finding (final whole-branch review): no screen re-reads the
+// mirror when a remote change streams in underneath it -- each screen's
+// data-loading effect only re-runs on mount/filter-change, so a book added
+// on another device only shows up after the local user navigates away and
+// back. Fixes that by giving every screen a way to know "something in the
+// mirror changed, maybe re-fetch" without needing per-table/per-row
+// granularity (any table changing is cheap enough to just re-run each
+// screen's own already-scoped query).
+//
+// Coalesced rather than firing once per row: a big shape-stream catch-up or
+// bootstrap seed can apply dozens of rows in a tight loop, and screens only
+// care about "did anything change recently", not each individual write --
+// so this behaves as a simple leading-edge throttle (schedule one
+// notification, ignore further calls until it fires) rather than a full
+// trailing debounce, cheap and sufficient for "refresh in the background,
+// near-real-time" (the plan's own phrase for this).
+const MIRROR_CHANGE_DEBOUNCE_MS = 200;
+const mirrorChangeListeners = new Set<() => void>();
+let mirrorChangeTimer: ReturnType<typeof setTimeout> | undefined;
+
+function notifyMirrorChange(): void {
+  if (mirrorChangeTimer !== undefined) return;
+  mirrorChangeTimer = setTimeout(() => {
+    mirrorChangeTimer = undefined;
+    for (const listener of mirrorChangeListeners) listener();
+  }, MIRROR_CHANGE_DEBOUNCE_MS);
+}
+
+export function onMirrorChange(callback: () => void): () => void {
+  mirrorChangeListeners.add(callback);
+  return () => mirrorChangeListeners.delete(callback);
+}
+
+// For tests only — clears any pending debounce timer so a lingering
+// callback from one test can't fire during (or after) a later one.
+export function __resetMirrorChangeForTests(): void {
+  if (mirrorChangeTimer !== undefined) clearTimeout(mirrorChangeTimer);
+  mirrorChangeTimer = undefined;
+  mirrorChangeListeners.clear();
 }
 
 /**

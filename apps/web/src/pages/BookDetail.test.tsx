@@ -37,6 +37,10 @@ vi.mock("../lib/repo/loans.js", () => ({
   updateLoan: vi.fn(),
 }));
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
+// See Library.test.tsx's comment on the same mock — BookDetail now
+// subscribes to mirror-change notifications too (Important finding, final
+// whole-branch review).
+vi.mock("../lib/sync/shape.js", () => ({ onMirrorChange: () => () => {} }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
 const navigateMock = vi.fn();

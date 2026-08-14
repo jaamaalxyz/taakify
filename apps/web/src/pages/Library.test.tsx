@@ -10,6 +10,13 @@ import { useHousehold } from "../lib/household-context.js";
 vi.mock("../lib/repo/books.js", () => ({ listBooks: vi.fn() }));
 vi.mock("../lib/repo/tags.js", () => ({ listTags: vi.fn() }));
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
+// Library now subscribes to mirror-change notifications (Important finding,
+// final whole-branch review) so remote edits refresh the list without a
+// manual navigate-away-and-back. shape.js pulls in the real db/pglite.js
+// singleton (idb://, browser-only) if not mocked -- stub it to a no-op
+// subscription, since these tests only exercise the mount/filter-driven
+// fetch, not mirror-change refresh itself.
+vi.mock("../lib/sync/shape.js", () => ({ onMirrorChange: () => () => {} }));
 
 // Radix Select needs these DOM APIs, which jsdom doesn't implement, to open
 // its popover and register clicks on options.

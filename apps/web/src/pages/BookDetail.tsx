@@ -10,6 +10,7 @@ import { listBookcases } from "../lib/repo/shelves.js";
 import { listTags } from "../lib/repo/tags.js";
 import { listContacts } from "../lib/repo/contacts.js";
 import { listLoans, createLoan, updateLoan } from "../lib/repo/loans.js";
+import { onMirrorChange } from "../lib/sync/shape.js";
 import { friendlyError } from "../lib/error-messages.js";
 import type {
   Book,
@@ -210,13 +211,21 @@ export function BookDetail() {
       });
   }
 
+  // Bumped whenever the local mirror changes underneath us (a remote edit
+  // streaming in via Electric, or our own optimistic write) -- re-runs the
+  // four loaders below so e.g. another household member's status/tag/loan
+  // change on this book shows up without a manual navigate-away-and-back
+  // (Important finding, final whole-branch review).
+  const [mirrorTick, setMirrorTick] = useState(0);
+  useEffect(() => onMirrorChange(() => setMirrorTick((t) => t + 1)), []);
+
   useEffect(() => {
     loadBook();
     loadStatuses();
     loadBookTags();
     loadActiveLoan();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookId]);
+  }, [bookId, mirrorTick]);
 
   useEffect(() => {
     if (book) {

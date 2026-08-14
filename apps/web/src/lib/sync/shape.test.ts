@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import mirrorSchema from "../db/mirror-schema.sql?raw";
 
@@ -18,7 +18,9 @@ import {
   bootstrapInto,
   getSynced,
   onSyncedChange,
+  onMirrorChange,
   __resetSyncedForTests,
+  __resetMirrorChangeForTests,
   __markUpToDateForTests,
   __totalShapeCountForTests,
 } from "./shape.js";
@@ -252,6 +254,79 @@ describe("synced signal", () => {
       __markUpToDateForTests(`table-${i}`);
     }
     expect(getSynced()).toBe(true);
+    expect(notified).toBe(false);
+  });
+});
+
+// Important finding (final whole-branch review): no screen re-read the
+// mirror when a remote change streamed in underneath it. onMirrorChange
+// gives screens a way to know "something changed, maybe re-fetch".
+describe("onMirrorChange", () => {
+  afterEach(() => {
+    __resetMirrorChangeForTests();
+  });
+
+  it("notifies subscribers (debounced) after applyChangeTo applies an insert", async () => {
+    let notifications = 0;
+    const unsubscribe = onMirrorChange(() => {
+      notifications++;
+    });
+
+    await applyChangeTo(db, "bookcase", "insert", bookcase());
+    expect(notifications).toBe(0); // debounced, not synchronous
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(notifications).toBe(1);
+
+    unsubscribe();
+  });
+
+  it("notifies after a delete too", async () => {
+    const row = bookcase({ id: "00000000-0000-0000-0000-000000000099" });
+    await applyChangeTo(db, "bookcase", "insert", row);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    let notified = false;
+    const unsubscribe = onMirrorChange(() => {
+      notified = true;
+    });
+    await applyChangeTo(db, "bookcase", "delete", row);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    expect(notified).toBe(true);
+    unsubscribe();
+  });
+
+  it("coalesces a burst of changes into a single notification", async () => {
+    let notifications = 0;
+    const unsubscribe = onMirrorChange(() => {
+      notifications++;
+    });
+
+    for (let i = 0; i < 5; i++) {
+      await applyChangeTo(
+        db,
+        "bookcase",
+        "insert",
+        bookcase({ id: `00000000-0000-0000-0000-00000000020${i}` })
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    expect(notifications).toBe(1);
+    unsubscribe();
+  });
+
+  it("stops delivering to a listener after unsubscribe", async () => {
+    let notified = false;
+    const unsubscribe = onMirrorChange(() => {
+      notified = true;
+    });
+    unsubscribe();
+
+    await applyChangeTo(db, "bookcase", "insert", bookcase({ id: "00000000-0000-0000-0000-000000000098" }));
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
     expect(notified).toBe(false);
   });
 });

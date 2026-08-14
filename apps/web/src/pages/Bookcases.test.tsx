@@ -14,6 +14,10 @@ vi.mock("../lib/repo/shelves.js", () => ({
   updateShelf: vi.fn(),
 }));
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
+// See Library.test.tsx's comment on the same mock — Bookcases now
+// subscribes to mirror-change notifications too (Important finding, final
+// whole-branch review).
+vi.mock("../lib/sync/shape.js", () => ({ onMirrorChange: () => () => {} }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
 const household = { id: "h1", name: "Family Library", role: "owner" };

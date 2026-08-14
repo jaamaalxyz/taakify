@@ -4,6 +4,7 @@ import { BookOpen } from "lucide-react";
 import { useHousehold } from "../lib/household-context.js";
 import { listBooks } from "../lib/repo/books.js";
 import { listTags } from "../lib/repo/tags.js";
+import { onMirrorChange } from "../lib/sync/shape.js";
 import { friendlyError } from "../lib/error-messages.js";
 import {
   OWNERSHIP_LABELS,
@@ -63,6 +64,14 @@ export function Library() {
   const [loadError, setLoadError] = useState("");
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  // Bumped whenever the local mirror changes underneath us (a remote edit
+  // streaming in via Electric, or our own optimistic write) -- included in
+  // the data-loading effect's deps below so a book added on another device
+  // shows up here without the user having to navigate away and back
+  // (Important finding, final whole-branch review).
+  const [mirrorTick, setMirrorTick] = useState(0);
+
+  useEffect(() => onMirrorChange(() => setMirrorTick((t) => t + 1)), []);
 
   // Debounce the search box: wait 250ms after the user stops typing before
   // updating debouncedSearch, which is what actually drives the fetch below.
@@ -108,7 +117,7 @@ export function Library() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [household.id, debouncedSearch, ownership, statusFilter, tagFilter]);
+  }, [household.id, debouncedSearch, ownership, statusFilter, tagFilter, mirrorTick]);
 
   function handleLoadMore() {
     if (!books) return;

@@ -21,6 +21,10 @@ vi.mock("../lib/repo/contacts.js", () => ({
 }));
 vi.mock("../lib/repo/books.js", () => ({ listBooks: vi.fn() }));
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
+// See Library.test.tsx's comment on the same mock — Loans now subscribes to
+// mirror-change notifications too (Important finding, final whole-branch
+// review).
+vi.mock("../lib/sync/shape.js", () => ({ onMirrorChange: () => () => {} }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
 // Radix Select/Dialog need these DOM APIs, which jsdom doesn't implement.
