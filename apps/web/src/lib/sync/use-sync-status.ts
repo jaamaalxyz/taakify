@@ -13,17 +13,26 @@
 // tiny observable" shape, so a polling fallback was not needed.
 import { useEffect, useState } from "react";
 import { countDead, countPending, onOutboxChange } from "./outbox.js";
+import { getSyncStalled, onSyncStalledChange } from "./shape.js";
 
 export type SyncStatus = {
   online: boolean;
   pending: number;
   dead: number;
+  // True once the Electric shape stream has gone SYNC_STALL_TIMEOUT_MS
+  // (shape.ts) without reaching up-to-date -- distinct from `online` being
+  // false: this is "the browser thinks it's online but Electric itself is
+  // unreachable" (down container, network path blocked, etc.), which
+  // SyncGate's timeout-release backstop can otherwise mask as a
+  // fully-synced app with no visible indication anything's wrong.
+  stalled: boolean;
 };
 
 export function useSyncStatus(): SyncStatus {
   const [online, setOnline] = useState(() => navigator.onLine);
   const [pending, setPending] = useState(0);
   const [dead, setDead] = useState(0);
+  const [stalled, setStalled] = useState(getSyncStalled);
 
   useEffect(() => {
     function handleOnline() {
@@ -54,5 +63,10 @@ export function useSyncStatus(): SyncStatus {
     return onOutboxChange(() => void refresh());
   }, []);
 
-  return { online, pending, dead };
+  useEffect(() => {
+    setStalled(getSyncStalled());
+    return onSyncStalledChange(() => setStalled(getSyncStalled()));
+  }, []);
+
+  return { online, pending, dead, stalled };
 }

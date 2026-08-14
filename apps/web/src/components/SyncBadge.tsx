@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Badge } from "./ui/badge.js";
 import { Button } from "./ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "./ui/dialog.js";
-import { describeOperation, dismiss, listDeadLettered, retry, type OutboxRow } from "../lib/sync/outbox.js";
+import { describeOperation, dismiss, listDeadLettered, parseBody, retry, type OutboxRow } from "../lib/sync/outbox.js";
 import { useSyncStatus } from "../lib/sync/use-sync-status.js";
 
 // State precedence (the brief leaves this to judgment): dead-lettered rows
@@ -15,7 +15,7 @@ import { useSyncStatus } from "../lib/sync/use-sync-status.js";
 // toast). Offline and Saving are both transient/self-explanatory the moment
 // connectivity changes, so ordering them below "dead" costs nothing.
 export function SyncBadge() {
-  const { online, pending, dead } = useSyncStatus();
+  const { online, pending, dead, stalled } = useSyncStatus();
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<OutboxRow[]>([]);
 
@@ -62,7 +62,7 @@ export function SyncBadge() {
               rows.map((row) => (
                 <div key={row.id} className="flex items-center justify-between gap-2 rounded-md border p-2">
                   <span className="text-sm">
-                    {describeOperation(row.endpoint, row.method, row.body) ?? "Couldn't save changes"}
+                    {describeOperation(row.endpoint, row.method, parseBody(row.body)) ?? "Couldn't save changes"}
                   </span>
                   <div className="flex shrink-0 gap-2">
                     <Button size="sm" variant="outline" onClick={() => void handleRetry(row.id)}>
@@ -88,6 +88,16 @@ export function SyncBadge() {
 
   if (!online) {
     return <Badge variant="destructive">Offline</Badge>;
+  }
+
+  // Distinct from "Offline": the browser thinks it has connectivity, but
+  // the shape stream never reached up-to-date (Electric unreachable, its
+  // container down, etc.) -- see shape.ts's SYNC_STALL_TIMEOUT_MS. Without
+  // this, SyncGate's timeout/existing-data release backstop (Critical 2)
+  // could show a fully-populated app with no indication the live sync
+  // connection never actually came up.
+  if (stalled) {
+    return <Badge variant="destructive">Sync unavailable</Badge>;
   }
 
   if (pending > 0) {

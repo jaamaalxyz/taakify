@@ -109,13 +109,33 @@ export async function enqueue(
   });
 
   notifyOutboxChange();
+  // Don't wait for the next periodic tick (up to 5s, see
+  // startOutboxWorker's comment) to send a write made while online -- fire
+  // a flush immediately after committing. Deliberately not awaited: enqueue
+  // callers (the repo layer) return as soon as the optimistic write has
+  // landed locally, same as before this fix; the real network request
+  // still happens in the background exactly like a retry would. flush()'s
+  // own `flushing` guard makes this safe to call even if a background
+  // flush (timer/online-triggered) is already in flight.
+  void flush();
   return id;
 }
 
 // Guards against overlapping flush passes (e.g. the periodic timer firing
-// while an `online`-triggered flush is still in flight) -- without this, two
-// concurrent flushes could both pick up the same row and double-send it.
-let flushing = false;
+// while an `online`-triggered flush is still in flight, or `enqueue()`'s
+// own post-commit `void flush()` racing an explicit caller's `flush()`)
+// -- without this, two concurrent flushes could both pick up the same row
+// and double-send it.
+//
+// Deliberately a shared *promise*, not a boolean: every call while a pass
+// is already running returns that SAME in-flight promise rather than
+// silently no-op'ing, so `await flush()` always really does wait for a
+// pass covering the currently-due rows to finish, no matter how many other
+// callers (enqueue, the `online` listener, the periodic timer) triggered
+// it concurrently. A boolean guard that just returned early on a
+// concurrent call would let a caller's `await flush()` resolve before the
+// row it cares about had actually been sent.
+let inFlightFlush: Promise<void> | null = null;
 
 /**
  * Replay every due `pending` outbox row against the real API. A row is
@@ -123,23 +143,25 @@ let flushing = false;
  * window has elapsed. Rows with `status = 'dead'` or `'dismissed'` are
  * never picked up here -- only `'pending'` rows are.
  */
-export async function flush(): Promise<void> {
+export function flush(): Promise<void> {
+  if (inFlightFlush) return inFlightFlush;
+  inFlightFlush = runFlushPass().finally(() => {
+    inFlightFlush = null;
+  });
+  return inFlightFlush;
+}
+
+async function runFlushPass(): Promise<void> {
   await ready;
-  if (flushing) return;
-  flushing = true;
-  try {
-    const { rows } = await db.query<OutboxRow>(
-      `SELECT id, endpoint, method, body, attempts, next_retry_at FROM outbox
-       WHERE status = 'pending'
-       ORDER BY created_at ASC`
-    );
-    const now = Date.now();
-    const due = rows.filter((row) => !row.next_retry_at || new Date(row.next_retry_at).getTime() <= now);
-    for (const row of due) {
-      await flushRow(row);
-    }
-  } finally {
-    flushing = false;
+  const { rows } = await db.query<OutboxRow>(
+    `SELECT id, endpoint, method, body, attempts, next_retry_at FROM outbox
+     WHERE status = 'pending'
+     ORDER BY created_at ASC`
+  );
+  const now = Date.now();
+  const due = rows.filter((row) => !row.next_retry_at || new Date(row.next_retry_at).getTime() <= now);
+  for (const row of due) {
+    await flushRow(row);
   }
 }
 
@@ -189,7 +211,10 @@ async function flushRow(row: OutboxRow): Promise<void> {
 // jsonb columns generally round-trip as parsed objects through PGlite's
 // query results, but defend against a raw string coming back (e.g. a
 // different pg client config) rather than assume the driver's behavior.
-function parseBody(raw: unknown): unknown {
+// Exported so every call site that hands a raw OutboxRow.body to
+// describeOperation() parses it first -- see SyncBadge.tsx, which used to
+// skip this (Minor finding, final review fix round).
+export function parseBody(raw: unknown): unknown {
   if (typeof raw !== "string") return raw;
   try {
     return JSON.parse(raw);
@@ -315,7 +340,11 @@ export function describeOperation(endpoint: string, method: string, body: unknow
     return title ? `add "${title}"` : "add a book";
   }
 
-  if (method === "PATCH" && /^\/api\/books\/[^/]+\/status\/?$/.test(endpoint)) {
+  // apps/api/src/routes/reading-status.ts mounts this as
+  // `readingStatus.put(...)`, and repo/reading-status.ts sends PUT to
+  // match -- this used to check PATCH, which never matched a real request
+  // (Minor finding, final review fix round).
+  if (method === "PUT" && /^\/api\/books\/[^/]+\/status\/?$/.test(endpoint)) {
     return typeof b.status === "string" ? `mark as ${b.status}` : "update reading status";
   }
 

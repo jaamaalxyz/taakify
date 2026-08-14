@@ -105,11 +105,18 @@ bookTags.get("/:bookId/tags", async (c) => {
   return c.json({ tags: result });
 });
 
-// POST /api/books/:bookId/tags — body {tagId}
+// POST /api/books/:bookId/tags — body {id?, tagId}. `id` is the same
+// client-supplied-id story as every other create endpoint in this fix round
+// (see books.ts's POST / for the full rationale): the outbox's optimistic
+// local INSERT into book_tag generates its own id up front
+// (repo/tags.ts's attachBookTag), and without sending it here the server
+// would generate a DIFFERENT one via book_tag's DEFAULT gen_random_uuid(),
+// permanently duplicating the row once Electric syncs the real one down
+// under a different id (Critical 3, final review fix round).
 bookTags.post("/:bookId/tags", async (c) => {
   const user = c.get("user");
   const bookId = c.req.param("bookId");
-  const body = await c.req.json<{ tagId?: string }>().catch(() => ({}) as { tagId?: string });
+  const body = await c.req.json<{ id?: string; tagId?: string }>().catch(() => ({}) as { id?: string; tagId?: string });
   if (!body.tagId) return c.json({ error: "tagId is required" }, 400);
 
   const result = await withUser(user.id, async (client) => {
@@ -131,9 +138,11 @@ bookTags.post("/:bookId/tags", async (c) => {
     if (!tagRows[0] || tagRows[0].household_id !== householdId) return "not_found" as const;
 
     const { rows } = await client.query(
-      `INSERT INTO book_tag (household_id, book_id, tag_id)
-       VALUES ($1, $2, $3) RETURNING id, book_id, tag_id, updated_at`,
-      [householdId, bookId, body.tagId]
+      `INSERT INTO book_tag (id, household_id, book_id, tag_id)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
+       RETURNING id, book_id, tag_id, updated_at`,
+      [body.id ?? randomUUID(), householdId, bookId, body.tagId]
     );
     return rows[0];
   }).catch((err) => {

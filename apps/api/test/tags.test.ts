@@ -284,4 +284,70 @@ describe("tags", () => {
     ).json();
     expect(list.tags).toHaveLength(1);
   });
+
+  // --- book_tag client-supplied id + idempotent upsert (Critical 3, final
+  // review fix round) -----------------------------------------------------
+
+  it("POST /books/:bookId/tags with a client-supplied id creates the book_tag row under that exact id", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const book = await addBook(cookie, house.id, "Sapiens");
+    const tag = await addTag(cookie, house.id, "history");
+    const id = randomUUID();
+
+    const res = await app.request(`/api/books/${book.id}/tags`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ id, tagId: tag.body.tag.id }),
+    });
+    expect(res.status).toBe(201);
+    expect((await res.json()).bookTag.id).toBe(id);
+  });
+
+  it("POST /books/:bookId/tags retried with the same client-supplied id returns the same row, not a duplicate (Critical 3 regression test)", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const book = await addBook(cookie, house.id, "Sapiens");
+    const tag = await addTag(cookie, house.id, "history");
+    const id = randomUUID();
+    const body = JSON.stringify({ id, tagId: tag.body.tag.id });
+
+    const first = await app.request(`/api/books/${book.id}/tags`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body,
+    });
+    expect(first.status).toBe(201);
+    expect((await first.json()).bookTag.id).toBe(id);
+
+    const retry = await app.request(`/api/books/${book.id}/tags`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body,
+    });
+    expect(retry.status).toBe(201);
+    expect((await retry.json()).bookTag.id).toBe(id);
+
+    // No duplicate chip: exactly one tag on the book afterward, same as
+    // repo/tags.ts's listBookTags would read from the local mirror.
+    const listed = await (
+      await app.request(`/api/books/${book.id}/tags`, { headers: { cookie } })
+    ).json();
+    expect(listed.tags).toHaveLength(1);
+  });
+
+  it("POST /books/:bookId/tags without a client-supplied id still server-generates one (backward compatible)", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const book = await addBook(cookie, house.id, "Sapiens");
+    const tag = await addTag(cookie, house.id, "history");
+
+    const res = await app.request(`/api/books/${book.id}/tags`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ tagId: tag.body.tag.id }),
+    });
+    expect(res.status).toBe(201);
+    expect((await res.json()).bookTag.id).toBeTruthy();
+  });
 });

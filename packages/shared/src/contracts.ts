@@ -144,6 +144,13 @@ export interface ListTagsResponse {
 }
 
 export interface AttachBookTagRequest {
+  // See CreateBookRequest.id's comment — same client-supplied-id story, for
+  // the book_tag row this request creates. Added in the final review fix
+  // round (Critical 3): the optimistic local book_tag INSERT
+  // (repo/tags.ts's attachBookTag) always generated this id, but it never
+  // reached the server until now, so the synced-down row landed under a
+  // different id and permanently duplicated.
+  id?: string;
   tagId: string;
 }
 

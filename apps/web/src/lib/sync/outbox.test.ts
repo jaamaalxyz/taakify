@@ -355,11 +355,20 @@ describe("dismiss / listDeadLettered / counts (Task 7)", () => {
   });
 
   it("dismiss sets status to 'dismissed', which flush() never picks up again", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
-    vi.stubGlobal("fetch", fetchMock);
+    // Deliberately no successful-fetch stub in place yet when enqueue()
+    // runs: since enqueue() now triggers a background flush of its own
+    // (Critical 1 fix), stubbing an immediately-ok fetch *before* enqueue
+    // would race dismiss() below -- the auto-flush could delete the row
+    // out from under this test before dismiss() ever runs. The unstubbed
+    // `fetch` here fails (no fetch implementation registered), which
+    // exercises the same "leave it pending" path without that race; the
+    // real assertions (dismiss -> status, then flush() never re-sends) only
+    // care about behavior after the success stub is installed below.
     const id = await enqueue("/api/tags", "POST", { name: "history" });
 
     await dismiss(id);
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
     const { rows } = await db.query<{ status: string }>(`SELECT status FROM outbox WHERE id = $1`, [id]);
     expect(rows[0].status).toBe("dismissed");
 

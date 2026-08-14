@@ -5,7 +5,7 @@ import { AppShell } from "./AppShell.js";
 import { api } from "../lib/api.js";
 import { authClient } from "../lib/auth.js";
 import { db } from "../lib/db/pglite.js";
-import { flush } from "../lib/sync/outbox.js";
+import { flush, startOutboxWorker } from "../lib/sync/outbox.js";
 import { startSync, bootstrap } from "../lib/sync/shape.js";
 
 vi.mock("../lib/auth.js", () => ({
@@ -19,19 +19,28 @@ vi.mock("../lib/api.js", () => ({ api: vi.fn() }));
 // in-memory) PGlite instance here, since this file is about AppShell's
 // routing/gating logic, not PGlite itself.
 vi.mock("../lib/db/pglite.js", () => ({
-  db: { close: vi.fn().mockResolvedValue(undefined) },
+  db: {
+    close: vi.fn().mockResolvedValue(undefined),
+    // SyncGate's existing-data escape hatch (Critical 2 fix) probes this --
+    // default to "no local data yet" so existing gate tests (which drive
+    // release purely via synced/stalled) aren't affected by this query
+    // resolving early.
+    query: vi.fn().mockResolvedValue({ rows: [] }),
+  },
+  ready: Promise.resolve(),
   IDB_DATABASE_NAME: "/pglite/taakify",
 }));
 
 vi.mock("../lib/sync/outbox.js", () => ({
   flush: vi.fn().mockResolvedValue(undefined),
+  startOutboxWorker: vi.fn(),
 }));
 
 // Mutable in-test control over use-sync-status.js's reported pending count,
 // so sign-out gating (Task 7 Step 3) can be exercised for both the
 // no-pending (immediate sign-out) and pending (warning dialog) cases
 // without a real outbox/PGlite round-trip.
-const syncStatus = vi.hoisted(() => ({ online: true, pending: 0, dead: 0 }));
+const syncStatus = vi.hoisted(() => ({ online: true, pending: 0, dead: 0, stalled: false }));
 
 vi.mock("../lib/sync/use-sync-status.js", () => ({
   useSyncStatus: () => ({ ...syncStatus }),
@@ -45,7 +54,9 @@ vi.mock("../lib/sync/use-sync-status.js", () => ({
 // ordinary outer variable would close over a not-yet-initialized binding.
 const syncState = vi.hoisted(() => ({
   synced: false,
+  stalled: false,
   listeners: new Set<() => void>(),
+  stallListeners: new Set<() => void>(),
 }));
 
 vi.mock("../lib/sync/shape.js", () => ({
@@ -56,11 +67,27 @@ vi.mock("../lib/sync/shape.js", () => ({
     syncState.listeners.add(cb);
     return () => syncState.listeners.delete(cb);
   },
+  getSyncStalled: () => syncState.stalled,
+  onSyncStalledChange: (cb: () => void) => {
+    syncState.stallListeners.add(cb);
+    return () => syncState.stallListeners.delete(cb);
+  },
 }));
 
 function setSynced(value: boolean) {
   syncState.synced = value;
   for (const l of syncState.listeners) l();
+}
+
+function setStalled(value: boolean) {
+  syncState.stalled = value;
+  // useSyncStatus is mocked independently of shape.js in this file (see
+  // `syncStatus` above) -- SyncBadge reads the former, SyncGate reads the
+  // latter, so both need updating to exercise the "stalled" state
+  // end-to-end the way the real app wires them together via
+  // use-sync-status.ts.
+  syncStatus.stalled = value;
+  for (const l of syncState.stallListeners) l();
 }
 
 const me = {
@@ -70,10 +97,13 @@ const me = {
 
 beforeEach(() => {
   syncState.synced = false;
+  syncState.stalled = false;
   syncState.listeners.clear();
+  syncState.stallListeners.clear();
   syncStatus.online = true;
   syncStatus.pending = 0;
   syncStatus.dead = 0;
+  syncStatus.stalled = false;
   vi.mocked(api).mockReset();
   vi.mocked(api).mockImplementation(async (path: string) => {
     if (path === "/api/me") return me;
@@ -118,6 +148,13 @@ describe("AppShell sync gate", () => {
     expect(bootstrap).toHaveBeenCalledWith("h1");
   });
 
+  it("starts the outbox background worker alongside startSync/bootstrap (Critical 1 fix)", async () => {
+    renderShell();
+    await waitFor(() => expect(document.querySelector(".animate-pulse")).toBeInTheDocument());
+
+    expect(startOutboxWorker).toHaveBeenCalled();
+  });
+
   it("renders the route content and header once synced flips true", async () => {
     renderShell();
     await waitFor(() => expect(document.querySelector(".animate-pulse")).toBeInTheDocument());
@@ -129,6 +166,30 @@ describe("AppShell sync gate", () => {
 
     expect(await screen.findByRole("heading", { name: "Library" })).toBeInTheDocument();
     expect(screen.getByText("Family Library")).toBeInTheDocument();
+  });
+
+  it("releases the gate when the shape stream is reported stalled, even though synced never became true (Critical 2 fix)", async () => {
+    renderShell();
+    await waitFor(() => expect(document.querySelector(".animate-pulse")).toBeInTheDocument());
+    expect(screen.queryByRole("heading", { name: "Library" })).not.toBeInTheDocument();
+
+    act(() => {
+      setStalled(true);
+    });
+
+    expect(await screen.findByRole("heading", { name: "Library" })).toBeInTheDocument();
+    // synced never became true -- SyncBadge should surface this as "Sync
+    // unavailable" rather than looking like a normal, fully-synced app.
+    expect(await screen.findByText("Sync unavailable")).toBeInTheDocument();
+  });
+
+  it("releases the gate immediately when the local mirror already has data, without waiting on synced/stalled (Critical 2 fix)", async () => {
+    vi.mocked(db.query).mockResolvedValueOnce({ rows: [{ "?column?": 1 }] } as never);
+
+    renderShell();
+
+    expect(await screen.findByRole("heading", { name: "Library" })).toBeInTheDocument();
+    expect(startSync).toHaveBeenCalledWith("h1");
   });
 });
 

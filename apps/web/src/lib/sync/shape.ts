@@ -214,6 +214,13 @@ function markUpToDate(table: string): void {
   if (synced !== wasSynced) {
     for (const listener of listeners) listener();
   }
+  if (synced) {
+    if (stallTimer !== undefined) {
+      clearTimeout(stallTimer);
+      stallTimer = undefined;
+    }
+    setStalled(false);
+  }
 }
 
 export function getSynced(): boolean {
@@ -230,6 +237,53 @@ export function onSyncedChange(callback: () => void): () => void {
 export function __resetSyncedForTests(): void {
   upToDateTables.clear();
   synced = false;
+}
+
+// --- Stalled-sync signal ----------------------------------------------
+//
+// True once SYNC_STALL_TIMEOUT_MS has elapsed since startSync() was called
+// without `synced` becoming true -- i.e. every shape subscription's error
+// callback below (or a subscription that just never receives a message) can
+// leave `synced` false forever with no other signal that anything is wrong
+// (Electric unreachable, its container restarting, etc.), as distinct from
+// the user simply being offline (already covered by the browser's
+// online/offline events in use-sync-status.ts). Two consumers:
+//   - SyncGate (AppShell.tsx) uses this same timeout to release its loading
+//     gate rather than spin forever.
+//   - SyncBadge surfaces it as a distinct "Sync unavailable" state so an
+//     app released via the timeout doesn't silently look fully synced.
+// 6s: long enough that a normal fast cold-start (shapes reaching
+// up-to-date within a second or two on a healthy connection) never sees it,
+// short enough that a genuinely broken connection doesn't leave the loading
+// skeleton up for an unreasonable stretch.
+export const SYNC_STALL_TIMEOUT_MS = 6000;
+
+let stalled = false;
+let stallTimer: ReturnType<typeof setTimeout> | undefined;
+const stallListeners = new Set<() => void>();
+
+function setStalled(value: boolean): void {
+  if (stalled === value) return;
+  stalled = value;
+  for (const listener of stallListeners) listener();
+}
+
+export function getSyncStalled(): boolean {
+  return stalled;
+}
+
+export function onSyncStalledChange(callback: () => void): () => void {
+  stallListeners.add(callback);
+  return () => stallListeners.delete(callback);
+}
+
+// For tests only — clears the pending timer and resets the flag so each
+// test starts from a clean slate regardless of timer state left over from a
+// previous test / previous startSync() call.
+export function __resetSyncStalledForTests(): void {
+  if (stallTimer !== undefined) clearTimeout(stallTimer);
+  stallTimer = undefined;
+  stalled = false;
 }
 
 // Drive the internal "table reached up-to-date" bookkeeping directly — for
@@ -339,6 +393,14 @@ export function startSync(householdId: string): void {
   // unfiltered is consistent with the existing trust model, not a new
   // leak — there's no per-household `where` clause to filter by.
   subscribeTable("edition", undefined, undefined);
+
+  // Arm the stall watchdog: if `synced` hasn't flipped true by the time this
+  // fires, something is genuinely wrong with the shape stream (as opposed
+  // to a normal cold start still catching up) -- see SYNC_STALL_TIMEOUT_MS's
+  // comment.
+  stallTimer = setTimeout(() => {
+    if (!synced) setStalled(true);
+  }, SYNC_STALL_TIMEOUT_MS);
 }
 
 function subscribeTable(

@@ -3,9 +3,16 @@ import { NavLink, Outlet } from "react-router-dom";
 import { Library, Plus, HandCoins, User, LogOut } from "lucide-react";
 import { authClient } from "../lib/auth.js";
 import { HouseholdProvider, useHousehold } from "../lib/household-context.js";
-import { db, IDB_DATABASE_NAME } from "../lib/db/pglite.js";
-import { bootstrap, getSynced, onSyncedChange, startSync } from "../lib/sync/shape.js";
-import { flush } from "../lib/sync/outbox.js";
+import { db, IDB_DATABASE_NAME, ready } from "../lib/db/pglite.js";
+import {
+  bootstrap,
+  getSynced,
+  getSyncStalled,
+  onSyncedChange,
+  onSyncStalledChange,
+  startSync,
+} from "../lib/sync/shape.js";
+import { flush, startOutboxWorker } from "../lib/sync/outbox.js";
 import { useSyncStatus } from "../lib/sync/use-sync-status.js";
 import { Alert, AlertDescription } from "./ui/alert.js";
 import { Button } from "./ui/button.js";
@@ -140,12 +147,33 @@ function TabBar() {
 // catch up moments later). It never blocks `synced`, which still depends
 // only on the shapes' own signal -- see bootstrap()'s doc comment in
 // shape.ts for why a bootstrap failure must stay a non-event here.
+// Critical 2 fix (final whole-branch review): the gate used to wait
+// unconditionally for `synced`, with no escape hatch -- a shape stream that
+// never reaches up-to-date (Electric unreachable, offline reload, container
+// restarting) meant this Skeleton spun forever, even when the local PGlite
+// mirror already held a full, real copy of the household's data from a
+// previous session. Two release paths besides genuine `synced === true`:
+//
+//   1. Existing local data: if the mirror already has at least one `book`
+//      row, this isn't a true first-ever cold start -- release immediately
+//      rather than waiting on the shape stream at all. The stream keeps the
+//      data fresh once/if it connects; there's nothing to protect the user
+//      from by holding the gate here.
+//   2. A bounded timeout (shape.ts's SYNC_STALL_TIMEOUT_MS, shared with the
+//      "stalled" signal SyncBadge surfaces): if neither `synced` nor the
+//      existing-data check has released the gate by then, release anyway.
+//
+// A genuine first-ever cold start with a healthy connection still hits
+// neither escape path in practice -- `synced` flips true well inside the
+// timeout window, so the Skeleton shows only as briefly as it always did.
 function SyncGate({ children }: { children: React.ReactNode }) {
   const { household } = useHousehold();
   const [synced, setSynced] = useState(getSynced);
+  const [released, setReleased] = useState(() => getSynced() || getSyncStalled());
 
   useEffect(() => {
     startSync(household.id);
+    startOutboxWorker();
     void bootstrap(household.id);
     // Reconcile immediately: `synced` may have already flipped true in the
     // window between this component's initial render (which read
@@ -153,10 +181,35 @@ function SyncGate({ children }: { children: React.ReactNode }) {
     // subscribing alone would only catch *future* transitions and could
     // otherwise get stuck showing the loading state forever.
     setSynced(getSynced());
-    return onSyncedChange(() => setSynced(getSynced()));
+    if (getSynced() || getSyncStalled()) setReleased(true);
+
+    let cancelled = false;
+    void ready
+      .then(() => db.query("SELECT 1 FROM book LIMIT 1"))
+      .then((result) => {
+        if (!cancelled && result.rows.length > 0) setReleased(true);
+      })
+      .catch(() => {
+        // A failed probe query shouldn't block either of the other two
+        // release paths (synced / stall timeout) -- just skip this one.
+      });
+
+    const unsubscribeSynced = onSyncedChange(() => {
+      setSynced(getSynced());
+      setReleased(true);
+    });
+    const unsubscribeStalled = onSyncStalledChange(() => {
+      if (getSyncStalled()) setReleased(true);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribeSynced();
+      unsubscribeStalled();
+    };
   }, [household.id]);
 
-  if (!synced) {
+  if (!released) {
     return (
       <div className="flex min-h-dvh flex-col pb-16">
         <main className="flex-1 space-y-3 p-4">

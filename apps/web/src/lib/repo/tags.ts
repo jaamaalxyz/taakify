@@ -75,7 +75,12 @@ export async function attachBookTag(bookId: string, householdId: string, tagId: 
   await enqueue(
     `/api/books/${bookId}/tags`,
     "POST",
-    { tagId },
+    // `id` now reaches the server (AttachBookTagRequest.id) so the
+    // optimistic local row above and the eventual synced-down server row
+    // converge on the same id instead of permanently duplicating — see
+    // apps/api/src/routes/tags.ts's POST /:bookId/tags for the matching
+    // server-side upsert (Critical 3, final review fix round).
+    { id, tagId },
     {
       sql: `INSERT INTO book_tag (id, household_id, book_id, tag_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
       params: [id, householdId, bookId, tagId, now],
