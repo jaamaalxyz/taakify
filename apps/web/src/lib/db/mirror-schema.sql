@@ -143,13 +143,32 @@ CREATE TABLE IF NOT EXISTS loan (
 
 -- Local-only: queue of writes made while offline (or optimistically, before
 -- server confirmation), replayed against the API by Task 5's outbox worker.
+--
+-- `touched`: which mirror row(s) this row's optimistic write applied to --
+-- a jsonb array of {"table": ..., "id": ...}, derived from the optimistic
+-- SQL statements passed to enqueue() (see outbox.ts's deriveTouchedEntities).
+-- Exists so a dismissed row (final review fix round, Important 6) doesn't
+-- silently leave an orphaned, permanently-diverged-from-server optimistic
+-- row with no trace of which row it was -- listDismissedTouchedEntities()
+-- reads this to expose "these mirror rows may be out of sync" for a future
+-- UI affordance to act on. Nullable/absent for rows enqueued before this
+-- column existed (pre-fix-round data) or with no optimistic write at all.
 CREATE TABLE IF NOT EXISTS outbox (
   id uuid PRIMARY KEY,
   endpoint text NOT NULL,
   method text NOT NULL,
   body jsonb,
+  touched jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
   attempts int NOT NULL DEFAULT 0,
   next_retry_at timestamptz,
   status text NOT NULL DEFAULT 'pending'
 );
+
+-- Additive migration for local mirrors created before `touched` existed
+-- (this schema has no separate migration-tracking mechanism -- see the
+-- file header comment -- so an ALTER ... ADD COLUMN IF NOT EXISTS
+-- alongside the CREATE TABLE IF NOT EXISTS above is how a column gets
+-- added to an already-persisted browser database). A no-op on a fresh
+-- mirror, where the CREATE TABLE above already includes the column.
+ALTER TABLE outbox ADD COLUMN IF NOT EXISTS touched jsonb;

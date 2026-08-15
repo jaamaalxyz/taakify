@@ -95,13 +95,15 @@ export async function enqueue(
   await ready;
   const id = crypto.randomUUID();
   const statements = optimisticSql ? (Array.isArray(optimisticSql) ? optimisticSql : [optimisticSql]) : [];
+  const touched = deriveTouchedEntities(statements);
 
   await db.transaction(async (tx) => {
-    await tx.query(`INSERT INTO outbox (id, endpoint, method, body) VALUES ($1, $2, $3, $4::jsonb)`, [
+    await tx.query(`INSERT INTO outbox (id, endpoint, method, body, touched) VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`, [
       id,
       endpoint,
       method,
       body === undefined ? null : JSON.stringify(body),
+      touched.length ? JSON.stringify(touched) : null,
     ]);
     for (const stmt of statements) {
       await tx.query(stmt.sql, stmt.params ?? []);
@@ -119,6 +121,32 @@ export async function enqueue(
   // flush (timer/online-triggered) is already in flight.
   void flush();
   return id;
+}
+
+/** A single mirror row an outbox entry's optimistic write applied to. */
+export type TouchedEntity = { table: string; id: string };
+
+// Derives which mirror row(s) an outbox row's optimistic write(s) touched,
+// from the SQL text and params alone -- every optimistic INSERT/UPDATE in
+// the repo layer follows the convention of the target row's id being the
+// FIRST bound param (`params: [id, ...]` for an INSERT, `params: [rowId,
+// ...]` for an UPDATE built from a dynamic SET list -- see books.ts,
+// contacts.ts, loans.ts, shelves.ts, tags.ts, reading-status.ts). Best
+// effort: a statement that doesn't match `INSERT INTO <table>` or
+// `UPDATE <table>` (or has no params) is simply skipped rather than
+// throwing -- this is a diagnostic aid (Important 6's dismiss-tracking),
+// not something any write path's success should depend on.
+function deriveTouchedEntities(statements: OptimisticWrite[]): TouchedEntity[] {
+  const touched: TouchedEntity[] = [];
+  for (const stmt of statements) {
+    const match = /^\s*(?:INSERT INTO|UPDATE)\s+(\w+)/i.exec(stmt.sql);
+    const table = match?.[1];
+    const id = stmt.params?.[0];
+    if (table && typeof id === "string") {
+      touched.push({ table, id });
+    }
+  }
+  return touched;
 }
 
 // Guards against overlapping flush passes (e.g. the periodic timer firing
@@ -274,6 +302,35 @@ export async function dismiss(id: string): Promise<void> {
   await ready;
   await db.query(`UPDATE outbox SET status = 'dismissed' WHERE id = $1`, [id]);
   notifyOutboxChange();
+}
+
+/**
+ * Important 6 (final whole-branch review): dismissing a dead-lettered write
+ * marks the OUTBOX row dismissed but never touches the corresponding
+ * optimistic row it already wrote into the mirror -- that local book/loan/
+ * etc. row has no server-side counterpart and will never be corrected, with
+ * no trace of which row it was. A full "revert the mirror row on dismiss"
+ * isn't attempted here (the outbox has no notion of "the value before this
+ * write", only "the write to replay" -- reverting cleanly would need that
+ * too) -- this is the documented minimal fix instead: every enqueue() call
+ * now records which mirror row(s) it touched (`outbox.touched`, see
+ * deriveTouchedEntities above), so a dismissed row's touched entities are
+ * queryable here. No UI currently renders this (that's the documented
+ * follow-up -- e.g. an "unsynced" badge on the affected book/loan/etc.),
+ * but the data needed to build one now exists and survives dismissal (a
+ * dismissed outbox row is never deleted, only marked).
+ */
+export async function listDismissedTouchedEntities(): Promise<TouchedEntity[]> {
+  await ready;
+  const { rows } = await db.query<{ touched: TouchedEntity[] | string | null }>(
+    `SELECT touched FROM outbox WHERE status = 'dismissed' AND touched IS NOT NULL`
+  );
+  const entities: TouchedEntity[] = [];
+  for (const row of rows) {
+    const parsed = parseBody(row.touched) as TouchedEntity[] | null;
+    if (Array.isArray(parsed)) entities.push(...parsed);
+  }
+  return entities;
 }
 
 /**

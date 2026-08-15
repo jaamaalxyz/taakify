@@ -32,6 +32,7 @@ import {
   retry,
   dismiss,
   listDeadLettered,
+  listDismissedTouchedEntities,
   countPending,
   countDead,
   onOutboxChange,
@@ -422,6 +423,75 @@ describe("dismiss / listDeadLettered / counts (Task 7)", () => {
     listener.mockClear();
     await enqueue("/api/tags", "POST", { name: "poetry" });
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  // --- touched-entity tracking (Important 6, final review fix round) -----
+
+  it("enqueue records which mirror row(s) an optimistic write touched", async () => {
+    const bookId = "00000000-0000-0000-0000-000000000030";
+    await seedBook(bookId);
+
+    const id = await enqueue(`/api/books/${bookId}`, "PATCH", { do_not_lend: true }, {
+      sql: `UPDATE book SET do_not_lend = $2 WHERE id = $1`,
+      params: [bookId, true],
+    });
+
+    const { rows } = await db.query<{ touched: unknown }>(`SELECT touched FROM outbox WHERE id = $1`, [id]);
+    expect(rows[0].touched).toEqual([{ table: "book", id: bookId }]);
+  });
+
+  it("enqueue records every touched entity when multiple optimistic statements are given", async () => {
+    const bookId = "00000000-0000-0000-0000-000000000031";
+    const editionId = "00000000-0000-0000-0000-000000000032";
+
+    const id = await enqueue(
+      "/api/books",
+      "POST",
+      { id: bookId, edition: { id: editionId, title: "Dune" } },
+      [
+        {
+          sql: `INSERT INTO edition (id, title, created_at, updated_at) VALUES ($1, $2, now(), now())`,
+          params: [editionId, "Dune"],
+        },
+        {
+          sql: `INSERT INTO book (id, household_id, edition_id, ownership, created_by, created_at, updated_at)
+                VALUES ($1, $2, $3, 'owned', 'user-1', now(), now())`,
+          params: [bookId, HOUSEHOLD, editionId],
+        },
+      ]
+    );
+
+    const { rows } = await db.query<{ touched: unknown }>(`SELECT touched FROM outbox WHERE id = $1`, [id]);
+    expect(rows[0].touched).toEqual([
+      { table: "edition", id: editionId },
+      { table: "book", id: bookId },
+    ]);
+  });
+
+  it("enqueue without an optimistic write records no touched entities", async () => {
+    const id = await enqueue("/api/contacts", "POST", { name: "Alex" });
+    const { rows } = await db.query<{ touched: unknown }>(`SELECT touched FROM outbox WHERE id = $1`, [id]);
+    expect(rows[0].touched).toBeNull();
+  });
+
+  it("listDismissedTouchedEntities returns touched entities only for dismissed rows", async () => {
+    const bookId = "00000000-0000-0000-0000-000000000033";
+    await seedBook(bookId);
+
+    const dismissedId = await enqueue(`/api/books/${bookId}`, "PATCH", { do_not_lend: true }, {
+      sql: `UPDATE book SET do_not_lend = $2 WHERE id = $1`,
+      params: [bookId, true],
+    });
+    // Not dismissed -- must not show up.
+    await enqueue("/api/contacts", "POST", { name: "Alex" }, {
+      sql: `INSERT INTO contact (id, household_id, name, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, now(), now())`,
+      params: ["00000000-0000-0000-0000-000000000034", HOUSEHOLD, "Alex", "user-1"],
+    });
+
+    await dismiss(dismissedId);
+
+    const entities = await listDismissedTouchedEntities();
+    expect(entities).toEqual([{ table: "book", id: bookId }]);
   });
 });
 
