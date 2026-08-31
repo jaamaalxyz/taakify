@@ -44,6 +44,7 @@ import {
   BACKOFF_SCHEDULE_MS,
   AUTH_RETRY_DELAY_MS,
 } from "./outbox.js";
+import { OPTIMISTIC_UPDATED_AT } from "./optimistic-clock.js";
 
 const HOUSEHOLD = "00000000-0000-0000-0000-00000000000a";
 const EDITION = "00000000-0000-0000-0000-00000000000b";
@@ -681,6 +682,24 @@ describe("dismiss / listDeadLettered / counts (Task 7)", () => {
       { table: "edition", id: editionId },
       { table: "book", id: bookId },
     ]);
+  });
+
+  it("an explicit OptimisticWrite.touched override wins over the SQL-derived pair", async () => {
+    const bookId = "00000000-0000-0000-0000-000000000038";
+    await seedBook(bookId);
+
+    // Same shape as repo/tags.ts's removeBookTag: an UPDATE whose table is
+    // book_tag but whose badge-worthy row is the book. (tag id is a real
+    // uuid because the optimistic statement actually executes against the
+    // in-memory PGlite, whose book_tag.tag_id column is uuid-typed.)
+    const id = await enqueue(`/api/books/${bookId}/tags/00000000-0000-0000-0000-000000000039`, "DELETE", undefined, {
+      sql: `UPDATE book_tag SET deleted_at = now(), updated_at = $3 WHERE book_id = $1 AND tag_id = $2 AND deleted_at IS NULL`,
+      params: [bookId, "00000000-0000-0000-0000-000000000039", OPTIMISTIC_UPDATED_AT],
+      touched: [{ table: "book", id: bookId }],
+    });
+
+    const { rows } = await db.query<{ touched: unknown }>(`SELECT touched FROM outbox WHERE id = $1`, [id]);
+    expect(rows[0].touched).toEqual([{ table: "book", id: bookId }]);
   });
 
   it("enqueue without an optimistic write records no touched entities", async () => {

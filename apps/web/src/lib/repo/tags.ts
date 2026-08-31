@@ -85,6 +85,12 @@ export async function attachBookTag(bookId: string, householdId: string, tagId: 
     {
       sql: `INSERT INTO book_tag (id, household_id, book_id, tag_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)`,
       params: [id, householdId, bookId, tagId, now, OPTIMISTIC_UPDATED_AT],
+      // The statement targets a book_tag join row, but no surface renders
+      // book_tag rows — the visible thing that goes stale when this write
+      // dead-letters is the book's tag list, so that's the row the
+      // "Unsynced" badge should sit on (issue #16 review finding: without
+      // this override, a failed tag add/remove badges nothing at all).
+      touched: [{ table: "book", id: bookId }],
     }
   );
 }
@@ -94,5 +100,10 @@ export async function removeBookTag(bookId: string, tagId: string): Promise<void
   await enqueue(`/api/books/${bookId}/tags/${tagId}`, "DELETE", undefined, {
     sql: `UPDATE book_tag SET deleted_at = now(), updated_at = $3 WHERE book_id = $1 AND tag_id = $2 AND deleted_at IS NULL`,
     params: [bookId, tagId, OPTIMISTIC_UPDATED_AT],
+    // Same rationale as attachBookTag above — plus the derived pair here
+    // would be actively wrong: the first bound param is bookId, but the
+    // statement's table is book_tag, whose PK is neither bookId nor tagId,
+    // so the convention would record a nonexistent row id.
+    touched: [{ table: "book", id: bookId }],
   });
 }

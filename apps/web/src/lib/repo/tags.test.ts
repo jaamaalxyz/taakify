@@ -105,6 +105,21 @@ describe("attachBookTag (Critical 3 regression)", () => {
     expect(outboxRows[0].body).toEqual({ id: localId, tagId: tag.id });
   });
 
+  it("records the BOOK as the touched entity, so a dead-lettered tag add badges the book (issue #16)", async () => {
+    const bookId = "00000000-0000-0000-0000-000000000013";
+    await seedBook(bookId);
+    const tag = await findOrCreateTag(HOUSEHOLD, "sci-fi", USER);
+
+    await attachBookTag(bookId, HOUSEHOLD, tag.id);
+
+    const { rows } = await db.query<{ touched: { table: string; id: string }[] }>(
+      `SELECT touched FROM outbox WHERE endpoint = '/api/books/${bookId}/tags'`
+    );
+    // Not the derived (book_tag, <row id>) pair -- no surface renders
+    // book_tag rows, so that would badge nothing.
+    expect(rows[0].touched).toEqual([{ table: "book", id: bookId }]);
+  });
+
   it("listBookTags returns exactly one row per attached tag", async () => {
     const bookId = "00000000-0000-0000-0000-000000000011";
     await seedBook(bookId);
@@ -133,5 +148,22 @@ describe("removeBookTag", () => {
       `SELECT * FROM outbox WHERE endpoint = '/api/books/${bookId}/tags/${tag.id}' AND method = 'DELETE'`
     );
     expect(rows).toHaveLength(1);
+  });
+
+  it("records the BOOK as the touched entity, not the derived (book_tag, bookId) mismatch (issue #16)", async () => {
+    const bookId = "00000000-0000-0000-0000-000000000014";
+    await seedBook(bookId);
+    const tag = await findOrCreateTag(HOUSEHOLD, "romance", USER);
+    await attachBookTag(bookId, HOUSEHOLD, tag.id);
+
+    await removeBookTag(bookId, tag.id);
+
+    const { rows } = await db.query<{ touched: { table: string; id: string }[] }>(
+      `SELECT touched FROM outbox WHERE endpoint = '/api/books/${bookId}/tags/${tag.id}' AND method = 'DELETE'`
+    );
+    // The statement's first bound param is bookId but its table is book_tag
+    // (PK neither bookId nor tagId) -- without the explicit override the
+    // derived pair pointed at a nonexistent row.
+    expect(rows[0].touched).toEqual([{ table: "book", id: bookId }]);
   });
 });
