@@ -41,6 +41,10 @@ vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
 // subscribes to mirror-change notifications too (Important finding, final
 // whole-branch review).
 vi.mock("../lib/sync/shape.js", () => ({ onMirrorChange: () => () => {} }));
+// Issue #16's "Unsynced" badge -- mocked to a controllable Set, same
+// rationale as Library.test.tsx / Loans.test.tsx.
+const unsyncedBookIds = vi.hoisted(() => new Set<string>());
+vi.mock("../lib/sync/use-unsynced-ids.js", () => ({ useUnsyncedIds: () => unsyncedBookIds }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
 const navigateMock = vi.fn();
@@ -207,6 +211,7 @@ beforeEach(() => {
   vi.mocked(toast).mockReset();
   navigateMock.mockReset();
   vi.mocked(useHousehold).mockReturnValue({ user, household, members });
+  unsyncedBookIds.clear();
 });
 
 describe("BookDetail", () => {
@@ -220,6 +225,15 @@ describe("BookDetail", () => {
     expect(await screen.findByText("You:")).toBeInTheDocument();
     expect(screen.getByText("Grace:")).toBeInTheDocument();
     expect(screen.queryByText(/Member \(/)).not.toBeInTheDocument();
+  });
+
+  it("shows an Unsynced badge when this book's id is in the unsynced set (issue #16)", async () => {
+    unsyncedBookIds.add("b1");
+    mockRepo();
+    renderBookDetail();
+
+    expect(await screen.findByText("Dune")).toBeInTheDocument();
+    expect(screen.getByText("Unsynced")).toBeInTheDocument();
   });
 
   it("shows a load error when the book fetch fails", async () => {

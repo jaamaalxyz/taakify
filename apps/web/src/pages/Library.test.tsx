@@ -22,6 +22,11 @@ vi.mock("../lib/sync/shape.js", () => ({
   getSyncStalled: vi.fn(() => false),
   onSyncStalledChange: () => () => {},
 }));
+// Issue #16's "Unsynced" badge -- mocked to a controllable Set so these
+// tests can assert on the badge without a real outbox/PGlite round-trip
+// (that's use-unsynced-ids.test.ts's job).
+const unsyncedBookIds = vi.hoisted(() => new Set<string>());
+vi.mock("../lib/sync/use-unsynced-ids.js", () => ({ useUnsyncedIds: () => unsyncedBookIds }));
 
 // Radix Select needs these DOM APIs, which jsdom doesn't implement, to open
 // its popover and register clicks on options.
@@ -73,6 +78,7 @@ function renderLibrary() {
 beforeEach(() => {
   vi.mocked(listBooks).mockReset();
   vi.mocked(listTags).mockReset();
+  unsyncedBookIds.clear();
   vi.mocked(getSyncStalled).mockReturnValue(false);
   vi.mocked(useHousehold).mockReturnValue({
     user: { id: "u1", email: "a@b.com", name: "Ada" },
@@ -227,6 +233,21 @@ describe("Library", () => {
 
     expect(await screen.findByText("No books yet.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Add your first book" })).toHaveAttribute("href", "/add");
+  });
+
+  it("shows an Unsynced badge on a book whose id is in the unsynced set, and not on others (issue #16)", async () => {
+    const bookB = { ...bookA, id: "b2", edition: { ...bookA.edition, title: "Foundation" } };
+    unsyncedBookIds.add("b1");
+    mockRepo(() => [bookA, bookB]);
+    renderLibrary();
+
+    expect(await screen.findByText("Dune")).toBeInTheDocument();
+    const duneCard = screen.getByText("Dune").closest("a");
+    const foundationCard = screen.getByText("Foundation").closest("a");
+    expect(duneCard).not.toBeNull();
+    expect(foundationCard).not.toBeNull();
+    expect(duneCard!.textContent).toContain("Unsynced");
+    expect(foundationCard!.textContent).not.toContain("Unsynced");
   });
 
   it("shows a 'couldn't reach the server' empty state instead of 'No books yet' when sync is stalled", async () => {

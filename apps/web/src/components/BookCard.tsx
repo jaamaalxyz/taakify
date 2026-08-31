@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { BookOpen } from "lucide-react";
 import { Badge } from "./ui/badge.js";
+import { UnsyncedBadge } from "./UnsyncedBadge.js";
 import { OWNERSHIP_LABELS, type Ownership, type WishlistPriority } from "../lib/labels.js";
 
 export type LibraryBook = {
@@ -21,7 +22,7 @@ export type LibraryBook = {
   };
 };
 
-export function BookCard({ book }: { book: LibraryBook }) {
+export function BookCard({ book, unsynced }: { book: LibraryBook; unsynced?: boolean }) {
   return (
     <Link
       to={`/library/${book.id}`}
@@ -42,6 +43,7 @@ export function BookCard({ book }: { book: LibraryBook }) {
         <p className="line-clamp-2 text-sm font-medium">{book.edition.title}</p>
         <p className="line-clamp-1 text-xs text-muted-foreground">{book.edition.authors}</p>
         <Badge variant="outline">{OWNERSHIP_LABELS[book.ownership]}</Badge>
+        {unsynced && <UnsyncedBadge subject="book" />}
       </div>
     </Link>
   );

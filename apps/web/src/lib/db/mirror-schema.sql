@@ -147,12 +147,13 @@ CREATE TABLE IF NOT EXISTS loan (
 -- `touched`: which mirror row(s) this row's optimistic write applied to --
 -- a jsonb array of {"table": ..., "id": ...}, derived from the optimistic
 -- SQL statements passed to enqueue() (see outbox.ts's deriveTouchedEntities).
--- Exists so a dismissed row (final review fix round, Important 6) doesn't
--- silently leave an orphaned, permanently-diverged-from-server optimistic
--- row with no trace of which row it was -- listDismissedTouchedEntities()
--- reads this to expose "these mirror rows may be out of sync" for a future
--- UI affordance to act on. Nullable/absent for rows enqueued before this
--- column existed (pre-fix-round data) or with no optimistic write at all.
+-- Exists so a dismissed or dead row (final review fix round, Important 6;
+-- issue #16) doesn't silently leave an orphaned, permanently-diverged-from-
+-- server optimistic row with no trace of which row it was --
+-- listUnsyncedTouchedEntities() reads this to expose "these mirror rows may
+-- be out of sync" as an "Unsynced" badge on the affected book/loan/etc.
+-- Nullable/absent for rows enqueued before this column existed (pre-fix-
+-- round data) or with no optimistic write at all.
 CREATE TABLE IF NOT EXISTS outbox (
   id uuid PRIMARY KEY,
   endpoint text NOT NULL,

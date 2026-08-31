@@ -32,7 +32,7 @@ import {
   retry,
   dismiss,
   listDeadLettered,
-  listDismissedTouchedEntities,
+  listUnsyncedTouchedEntities,
   countPending,
   countDead,
   onOutboxChange,
@@ -44,6 +44,7 @@ import {
   BACKOFF_SCHEDULE_MS,
   AUTH_RETRY_DELAY_MS,
 } from "./outbox.js";
+import { OPTIMISTIC_UPDATED_AT } from "./optimistic-clock.js";
 
 const HOUSEHOLD = "00000000-0000-0000-0000-00000000000a";
 const EDITION = "00000000-0000-0000-0000-00000000000b";
@@ -683,30 +684,67 @@ describe("dismiss / listDeadLettered / counts (Task 7)", () => {
     ]);
   });
 
+  it("an explicit OptimisticWrite.touched override wins over the SQL-derived pair", async () => {
+    const bookId = "00000000-0000-0000-0000-000000000038";
+    await seedBook(bookId);
+
+    // Same shape as repo/tags.ts's removeBookTag: an UPDATE whose table is
+    // book_tag but whose badge-worthy row is the book. (tag id is a real
+    // uuid because the optimistic statement actually executes against the
+    // in-memory PGlite, whose book_tag.tag_id column is uuid-typed.)
+    const id = await enqueue(`/api/books/${bookId}/tags/00000000-0000-0000-0000-000000000039`, "DELETE", undefined, {
+      sql: `UPDATE book_tag SET deleted_at = now(), updated_at = $3 WHERE book_id = $1 AND tag_id = $2 AND deleted_at IS NULL`,
+      params: [bookId, "00000000-0000-0000-0000-000000000039", OPTIMISTIC_UPDATED_AT],
+      touched: [{ table: "book", id: bookId }],
+    });
+
+    const { rows } = await db.query<{ touched: unknown }>(`SELECT touched FROM outbox WHERE id = $1`, [id]);
+    expect(rows[0].touched).toEqual([{ table: "book", id: bookId }]);
+  });
+
   it("enqueue without an optimistic write records no touched entities", async () => {
     const id = await enqueue("/api/contacts", "POST", { name: "Alex" });
     const { rows } = await db.query<{ touched: unknown }>(`SELECT touched FROM outbox WHERE id = $1`, [id]);
     expect(rows[0].touched).toBeNull();
   });
 
-  it("listDismissedTouchedEntities returns touched entities only for dismissed rows", async () => {
-    const bookId = "00000000-0000-0000-0000-000000000033";
-    await seedBook(bookId);
+  it("listUnsyncedTouchedEntities returns touched entities for dismissed AND dead rows, not pending ones", async () => {
+    const dismissedBookId = "00000000-0000-0000-0000-000000000033";
+    const deadBookId = "00000000-0000-0000-0000-000000000035";
+    await seedBook(dismissedBookId);
+    await seedBook(deadBookId);
 
-    const dismissedId = await enqueue(`/api/books/${bookId}`, "PATCH", { do_not_lend: true }, {
+    const dismissedId = await enqueue(`/api/books/${dismissedBookId}`, "PATCH", { do_not_lend: true }, {
       sql: `UPDATE book SET do_not_lend = $2 WHERE id = $1`,
-      params: [bookId, true],
+      params: [dismissedBookId, true],
     });
-    // Not dismissed -- must not show up.
-    await enqueue("/api/contacts", "POST", { name: "Alex" }, {
-      sql: `INSERT INTO contact (id, household_id, name, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, now(), now())`,
-      params: ["00000000-0000-0000-0000-000000000034", HOUSEHOLD, "Alex", "user-1"],
-    });
-
     await dismiss(dismissedId);
 
-    const entities = await listDismissedTouchedEntities();
-    expect(entities).toEqual([{ table: "book", id: bookId }]);
+    // A row that reached 'dead' status without being dismissed -- direct
+    // insert (same pattern as the "retry() directly resets..." test above)
+    // to avoid re-deriving the whole backoff-exhaustion dance here.
+    await db.query(
+      `INSERT INTO outbox (id, endpoint, method, body, status, touched)
+       VALUES ('00000000-0000-0000-0000-000000000036', '/api/books/${deadBookId}', 'PATCH', '{}'::jsonb, 'dead', $1::jsonb)`,
+      [JSON.stringify([{ table: "book", id: deadBookId }])]
+    );
+
+    // Still pending -- must not show up (it hasn't failed permanently, and
+    // the outbox row itself will be deleted once it succeeds).
+    const pendingBookId = "00000000-0000-0000-0000-000000000037";
+    await seedBook(pendingBookId);
+    await enqueue(`/api/books/${pendingBookId}`, "PATCH", { do_not_lend: true }, {
+      sql: `UPDATE book SET do_not_lend = $2 WHERE id = $1`,
+      params: [pendingBookId, true],
+    });
+
+    const entities = await listUnsyncedTouchedEntities();
+    expect(entities.sort((a, b) => a.id.localeCompare(b.id))).toEqual(
+      [
+        { table: "book", id: dismissedBookId },
+        { table: "book", id: deadBookId },
+      ].sort((a, b) => a.id.localeCompare(b.id))
+    );
   });
 });
 

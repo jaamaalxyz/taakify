@@ -5,6 +5,7 @@ import { useHousehold } from "../lib/household-context.js";
 import { listBooks } from "../lib/repo/books.js";
 import { listTags } from "../lib/repo/tags.js";
 import { getSyncStalled, onMirrorChange, onSyncStalledChange } from "../lib/sync/shape.js";
+import { useUnsyncedIds } from "../lib/sync/use-unsynced-ids.js";
 import { friendlyError } from "../lib/error-messages.js";
 import {
   OWNERSHIP_LABELS,
@@ -54,6 +55,7 @@ const PAGE_SIZE = 100;
 
 export function Library() {
   const { household, user } = useHousehold();
+  const unsyncedBookIds = useUnsyncedIds("book");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [ownership, setOwnership] = useState<Ownership | "">("");
@@ -252,7 +254,7 @@ export function Library() {
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             {books.map((book) => (
-              <BookCard key={book.id} book={book} />
+              <BookCard key={book.id} book={book} unsynced={unsyncedBookIds.has(book.id)} />
             ))}
           </div>
           {hasMore && (

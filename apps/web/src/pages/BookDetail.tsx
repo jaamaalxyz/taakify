@@ -11,6 +11,7 @@ import { listTags } from "../lib/repo/tags.js";
 import { listContacts } from "../lib/repo/contacts.js";
 import { listLoans, createLoan, updateLoan } from "../lib/repo/loans.js";
 import { onMirrorChange } from "../lib/sync/shape.js";
+import { useUnsyncedIds } from "../lib/sync/use-unsynced-ids.js";
 import { friendlyError } from "../lib/error-messages.js";
 import { todayStr } from "../lib/local-date.js";
 import type {
@@ -36,6 +37,7 @@ import { StatusBadge } from "../components/StatusBadge.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Badge } from "../components/ui/badge.js";
+import { UnsyncedBadge } from "../components/UnsyncedBadge.js";
 import { Button } from "../components/ui/button.js";
 import { Label } from "../components/ui/label.js";
 import { Input } from "../components/ui/input.js";
@@ -73,6 +75,7 @@ export function BookDetail() {
   const { bookId } = useParams<{ bookId: string }>();
   const { household, user, members } = useHousehold();
   const navigate = useNavigate();
+  const unsyncedBookIds = useUnsyncedIds("book");
 
   const [book, setBook] = useState<Book | null>(null);
   const [statuses, setStatuses] = useState<Status[] | null>(null);
@@ -461,6 +464,7 @@ export function BookDetail() {
               <p className="text-xs text-muted-foreground">Language: {book.edition.language}</p>
             )}
             <Badge variant="outline">{OWNERSHIP_LABELS[book.ownership]}</Badge>
+            {unsyncedBookIds.has(book.id) && <UnsyncedBadge subject="book" />}
             {loanLoadError && (
               <p className="text-xs text-muted-foreground">Couldn't load loan status: {loanLoadError}</p>
             )}

@@ -25,6 +25,10 @@ vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
 // mirror-change notifications too (Important finding, final whole-branch
 // review).
 vi.mock("../lib/sync/shape.js", () => ({ onMirrorChange: () => () => {} }));
+// Issue #16's "Unsynced" badge -- mocked to a controllable Set, same
+// rationale as Library.test.tsx.
+const unsyncedLoanIds = vi.hoisted(() => new Set<string>());
+vi.mock("../lib/sync/use-unsynced-ids.js", () => ({ useUnsyncedIds: () => unsyncedLoanIds }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
 // Radix Select/Dialog need these DOM APIs, which jsdom doesn't implement.
@@ -111,6 +115,7 @@ beforeEach(() => {
   vi.mocked(listBooks).mockReset();
   vi.mocked(toast).mockReset();
   vi.mocked(useHousehold).mockReturnValue({ user, household, members: [] });
+  unsyncedLoanIds.clear();
 });
 
 describe("Loans", () => {
@@ -121,6 +126,16 @@ describe("Loans", () => {
     expect(await screen.findByText("Dune")).toBeInTheDocument();
     expect(screen.getByText(/Lent out.*Alice/)).toBeInTheDocument();
     expect(screen.getByText("Overdue")).toBeInTheDocument();
+  });
+
+  it("shows an Unsynced badge on a loan whose id is in the unsynced set (issue #16)", async () => {
+    unsyncedLoanIds.add("l1");
+    mockRepo();
+    renderLoans();
+
+    const loanItem = (await screen.findByText("Dune")).closest("li");
+    expect(loanItem).not.toBeNull();
+    expect(loanItem!.textContent).toContain("Unsynced");
   });
 
   it("marking a loan returned calls updateLoan and moves it out of the active list", async () => {

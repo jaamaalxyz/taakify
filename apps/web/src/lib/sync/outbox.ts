@@ -58,6 +58,14 @@ export const AUTH_RETRY_DELAY_MS = 60_000;
 export type OptimisticWrite = {
   sql: string;
   params?: unknown[];
+  // Explicit touched entities, overriding the SQL-derived derivation in
+  // deriveTouchedEntities. For statements whose target row isn't the row a
+  // surface renders -- e.g. repo/tags.ts's book_tag add/remove, which mutate
+  // a join row keyed by (book_id, tag_id) while the stale thing the user
+  // actually sees is the BOOK's tag list -- this records the row the
+  // "Unsynced" badge should sit on, instead of a (book_tag, <not-its-pk>)
+  // pair no consumer ever looks up.
+  touched?: TouchedEntity[];
 };
 
 export type OutboxRow = {
@@ -142,7 +150,7 @@ export async function enqueue(
   // still happens in the background exactly like a retry would. flush()'s
   // own `flushing` guard makes this safe to call even if a background
   // flush (timer/online-triggered) is already in flight.
-  void flush();
+  flushQuietly();
   return id;
 }
 
@@ -162,6 +170,12 @@ export type TouchedEntity = { table: string; id: string };
 function deriveTouchedEntities(statements: OptimisticWrite[]): TouchedEntity[] {
   const touched: TouchedEntity[] = [];
   for (const stmt of statements) {
+    // Explicit override (see OptimisticWrite.touched) beats the convention
+    // -- the whole point is recording a different row than the SQL implies.
+    if (stmt.touched) {
+      touched.push(...stmt.touched);
+      continue;
+    }
     const match = /^\s*(?:INSERT INTO|UPDATE)\s+(\w+)/i.exec(stmt.sql);
     const table = match?.[1];
     const id = stmt.params?.[0];
@@ -174,7 +188,7 @@ function deriveTouchedEntities(statements: OptimisticWrite[]): TouchedEntity[] {
 
 // Guards against overlapping flush passes (e.g. the periodic timer firing
 // while an `online`-triggered flush is still in flight, or `enqueue()`'s
-// own post-commit `void flush()` racing an explicit caller's `flush()`)
+// own post-commit background flush racing an explicit caller's `flush()`)
 // -- without this, two concurrent flushes could both pick up the same row
 // and double-send it.
 //
@@ -424,16 +438,16 @@ export async function dismiss(id: string): Promise<void> {
  * write", only "the write to replay" -- reverting cleanly would need that
  * too) -- this is the documented minimal fix instead: every enqueue() call
  * now records which mirror row(s) it touched (`outbox.touched`, see
- * deriveTouchedEntities above), so a dismissed row's touched entities are
- * queryable here. No UI currently renders this (that's the documented
- * follow-up -- e.g. an "unsynced" badge on the affected book/loan/etc.),
- * but the data needed to build one now exists and survives dismissal (a
- * dismissed outbox row is never deleted, only marked).
+ * deriveTouchedEntities above), so a dismissed OR dead row's touched
+ * entities are queryable here (issue #16: surface unsynced rows). A
+ * `pending` row is deliberately excluded -- it hasn't failed permanently
+ * yet, and the outbox row is deleted outright once it succeeds, so there's
+ * nothing left to flag once it does.
  */
-export async function listDismissedTouchedEntities(): Promise<TouchedEntity[]> {
+export async function listUnsyncedTouchedEntities(): Promise<TouchedEntity[]> {
   await ready;
   const { rows } = await db.query<{ touched: TouchedEntity[] | string | null }>(
-    `SELECT touched FROM outbox WHERE status = 'dismissed' AND touched IS NOT NULL`
+    `SELECT touched FROM outbox WHERE status IN ('dead', 'dismissed') AND touched IS NOT NULL`
   );
   const entities: TouchedEntity[] = [];
   for (const row of rows) {
@@ -577,11 +591,25 @@ export function describeOperation(endpoint: string, method: string, body: unknow
 
 // --- Background worker: resume flushing on `online` and on a timer -------
 
+// Background flush triggers (enqueue's post-commit kick, the online
+// listener, the periodic timer) are fire-and-forget by design -- but an
+// un-awaited promise that rejects (a mirror query landing after db.close(),
+// any transient PGlite error mid-pass) surfaces as an unhandled rejection
+// in both tests and the browser console. Log-and-swallow preserves the
+// best-effort semantics without that crash surface; the next trigger
+// (timer/online/enqueue) retries the pass anyway.
+function flushQuietly(): void {
+  flush().catch((error) => {
+    // eslint-disable-next-line no-console
+    console.error("[outbox] background flush failed", error);
+  });
+}
+
 let started = false;
 let intervalId: ReturnType<typeof setInterval> | undefined;
 
 function onOnline(): void {
-  void flush();
+  flushQuietly();
 }
 
 /**
@@ -596,7 +624,7 @@ export function startOutboxWorker(): void {
   started = true;
   window.addEventListener("online", onOnline);
   intervalId = setInterval(() => {
-    void flush();
+    flushQuietly();
   }, 5000);
 }
 
