@@ -104,6 +104,21 @@ async function performSignOut(): Promise<void> {
   await authClient.signOut().finally(() => location.reload());
 }
 
+// Pure so it can be unit-tested for the edge case that motivated it: `pending`
+// and `dead` come from the live useSyncStatus() hook, not a snapshot taken
+// when the confirm dialog opened, so a background flush can drop both to 0
+// while the dialog is still showing (e.g. the outbox worker's 5s timer fires,
+// or the user comes back online, before Cancel/Confirm is clicked). Without
+// this fallback, an empty warningParts list rendered the literal string
+// "undefined" (Code review finding, PR #15 polish batch).
+export function signOutWarningMessage(pending: number, dead: number): string {
+  const parts: string[] = [];
+  if (pending > 0) parts.push(`You have ${pending} unsaved change${pending === 1 ? "" : "s"}`);
+  if (dead > 0) parts.push(`${dead} change${dead === 1 ? "" : "s"} failed to save`);
+  if (parts.length === 0) return "All your changes have saved. Sign out?";
+  return `${parts.join(" and ")}. Sign out anyway? They’ll be lost.`;
+}
+
 function TabLink({ to, label, icon: Icon }: { to: string; label: string; icon: typeof Library }) {
   return (
     <NavLink
@@ -121,20 +136,25 @@ function TabLink({ to, label, icon: Icon }: { to: string; label: string; icon: t
 
 function AppHeader() {
   const { household } = useHousehold();
-  const { pending } = useSyncStatus();
+  const { pending, dead } = useSyncStatus();
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   function handleSignOutClick() {
-    // Case 1 (no pending writes, whether the outbox is empty or only holds
-    // dead-lettered/dismissed rows) -> no friction, sign out immediately.
-    // Case 2 (pending writes exist) -> warn first; performSignOut only runs
-    // if the user confirms.
-    if (pending === 0) {
+    // Case 1 (nothing pending and nothing dead-lettered) -> no friction,
+    // sign out immediately. Case 2 (pending writes and/or dead-lettered
+    // ones) -> warn first; performSignOut only runs if the user confirms.
+    // Dead rows used to sign out with no friction at all (they were already
+    // surfaced elsewhere), but that's silent data loss from the user's
+    // perspective at the moment they sign out -- fold them into the same
+    // gate (Minor finding, PR #15 review).
+    if (pending === 0 && dead === 0) {
       void performSignOut();
     } else {
       setConfirmOpen(true);
     }
   }
+
+  const warningMessage = signOutWarningMessage(pending, dead);
 
   return (
     <header className="flex items-center justify-between gap-3 border-b p-4">
@@ -152,9 +172,7 @@ function AppHeader() {
             <DialogTitle>Sign out?</DialogTitle>
           </DialogHeader>
           <Alert variant="destructive">
-            <AlertDescription>
-              You have {pending} unsaved change{pending === 1 ? "" : "s"}. Sign out anyway? They&rsquo;ll be lost.
-            </AlertDescription>
+            <AlertDescription>{warningMessage}</AlertDescription>
           </Alert>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>

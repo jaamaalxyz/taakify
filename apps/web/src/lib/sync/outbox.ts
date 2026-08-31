@@ -25,7 +25,8 @@ import { db, ready } from "../db/pglite.js";
 // Retry backoff schedule in milliseconds, per the plan brief ("1s, 2s, 5s,
 // 15s, 60s, then dead-letter"). `attempts` counts failures so far; the Nth
 // failure schedules `BACKOFF_SCHEDULE_MS[N - 1]` as the delay before the
-// next try. Once `attempts` reaches the schedule's length, the row is
+// next try. Once `attempts` exceeds the schedule's length (i.e. every slot,
+// including the final 60s one, has been used as a wait), the row is
 // dead-lettered instead of scheduled again. Exported so tests can drive the
 // exact schedule without hardcoding numbers that could silently drift.
 export const BACKOFF_SCHEDULE_MS = [1000, 2000, 5000, 15000, 60000];
@@ -298,7 +299,7 @@ async function flushRow(row: OutboxRow): Promise<FlushOutcome> {
 
 async function scheduleRetry(row: OutboxRow): Promise<FlushOutcome> {
   const attempts = row.attempts + 1;
-  if (attempts >= BACKOFF_SCHEDULE_MS.length) return deadLetter(row, false);
+  if (attempts > BACKOFF_SCHEDULE_MS.length) return deadLetter(row, false);
 
   const delayMs = BACKOFF_SCHEDULE_MS[attempts - 1];
   const nextRetryAt = new Date(Date.now() + delayMs).toISOString();
@@ -369,19 +370,20 @@ function fireDeadLetterToast(row: OutboxRow): void {
 }
 
 /**
- * Human-readable message for a dead-lettered row: the operation description
- * from `describeOperation`, prefixed for toasts and suffixed for permanent
- * (server-rejected) rows. Shared by the toast here and SyncBadge's dialog
- * so the two surfaces never drift apart in wording.
+ * Human-readable toast message for a dead-lettered row: "Couldn't
+ * <operation>" from `describeOperation`, suffixed for permanent
+ * (server-rejected) rows. (SyncBadge's dialog uses its own bare-description
+ * `rowLabel` -- a list item under a "Sync issue" heading doesn't want this
+ * toast's "Couldn't" prefix repeated per row.)
  */
 export function deadLetterMessage(row: OutboxRow): string {
   const description = describeOperation(row.endpoint, row.method, parseBody(row.body));
   if (row.permanent) {
     return description
-      ? `Couldn't save: ${description} — the server rejected this change`
+      ? `Couldn't ${description} — the server rejected this change`
       : "Couldn't save — the server rejected this change";
   }
-  return description ? `Couldn't save: ${description}` : "Couldn't save changes";
+  return description ? `Couldn't ${description}` : "Couldn't save changes";
 }
 
 /**
@@ -556,6 +558,18 @@ export function describeOperation(endpoint: string, method: string, body: unknow
 
   if (method === "PATCH" && /^\/api\/shelves\/[^/]+\/?$/.test(endpoint)) {
     return "update a shelf";
+  }
+
+  if (method === "DELETE" && /^\/api\/books\/[^/]+\/?$/.test(endpoint)) {
+    return "delete a book";
+  }
+
+  if (method === "DELETE" && /^\/api\/books\/[^/]+\/tags\/[^/]+\/?$/.test(endpoint)) {
+    return "remove a tag";
+  }
+
+  if (method === "DELETE" && /^\/api\/shelves\/[^/]+\/?$/.test(endpoint)) {
+    return "delete a shelf";
   }
 
   return undefined;

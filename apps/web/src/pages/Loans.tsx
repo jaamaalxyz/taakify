@@ -9,6 +9,7 @@ import { listBooks } from "../lib/repo/books.js";
 import { onMirrorChange } from "../lib/sync/shape.js";
 import { useUnsyncedIds } from "../lib/sync/use-unsynced-ids.js";
 import { friendlyError } from "../lib/error-messages.js";
+import { todayStr } from "../lib/local-date.js";
 import { LOAN_DIRECTION_LABELS, type LoanDirection as Direction } from "../lib/labels.js";
 import type { Loan as SharedLoan, Contact as SharedContact } from "@taakify/shared";
 import { Skeleton } from "../components/ui/skeleton.js";
@@ -41,18 +42,6 @@ type Contact = SharedContact;
 type SimpleBook = { id: string; edition: { title: string; authors: string } };
 
 const NEW_CONTACT = "__new__";
-
-// toISOString() renders in UTC, so in any non-UTC timezone it can report
-// tomorrow's (or yesterday's) date depending on time of day — the same bug
-// class apps/api/src/lib/date.ts's dateStr() was created to fix server-side.
-// Build the string from local Date components instead.
-function todayStr(): string {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
 
 function LoanRow({
   loan,

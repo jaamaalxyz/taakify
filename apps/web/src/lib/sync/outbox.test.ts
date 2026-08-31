@@ -37,6 +37,7 @@ import {
   countDead,
   onOutboxChange,
   describeOperation,
+  deadLetterMessage,
   startOutboxWorker,
   __resetOutboxWorkerForTests,
   __resetAuthToastForTests,
@@ -229,9 +230,9 @@ describe("dead-lettering", () => {
     const id = await enqueue("/api/loans/loan-1", "PATCH", { returned_date: "2026-01-01" });
 
     await flush(); // attempt 1
-    for (let i = 0; i < BACKOFF_SCHEDULE_MS.length - 1; i++) {
+    for (let i = 0; i < BACKOFF_SCHEDULE_MS.length; i++) {
       await vi.advanceTimersByTimeAsync(BACKOFF_SCHEDULE_MS[i] + 1);
-      await flush(); // attempts 2..N
+      await flush(); // attempts 2..N+1
     }
 
     const { rows } = await db.query<{ status: string; attempts: number }>(
@@ -239,17 +240,41 @@ describe("dead-lettering", () => {
       [id]
     );
     expect(rows[0].status).toBe("dead");
-    expect(rows[0].attempts).toBe(BACKOFF_SCHEDULE_MS.length);
+    expect(rows[0].attempts).toBe(BACKOFF_SCHEDULE_MS.length + 1);
 
     expect(toast.error).toHaveBeenCalledTimes(1);
     const [message, options] = vi.mocked(toast.error).mock.calls[0];
-    expect(message).toBe("Couldn't save: mark loan returned");
+    expect(message).toBe("Couldn't mark loan returned");
     expect(options?.action).toMatchObject({ label: "Retry" });
 
     // A dead row is no longer picked up by flush().
     fetchMock.mockClear();
     await flush();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uses every slot in BACKOFF_SCHEDULE_MS (including the 60s one) before dead-lettering", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const id = await enqueue("/api/loans/loan-1", "PATCH", { returned_date: "2026-01-01" });
+
+    await flush(); // attempt 1
+    for (let i = 0; i < BACKOFF_SCHEDULE_MS.length; i++) {
+      await vi.advanceTimersByTimeAsync(BACKOFF_SCHEDULE_MS[i] + 1);
+      await flush(); // attempts 2..N+1
+    }
+
+    const { rows } = await db.query<{ status: string; attempts: number }>(
+      `SELECT status, attempts FROM outbox WHERE id = $1`,
+      [id]
+    );
+    expect(rows[0].status).toBe("dead");
+    // One flush before the loop (attempt 1) + one per schedule slot exhausted
+    // inside the loop (attempts 2..6) = every slot in BACKOFF_SCHEDULE_MS
+    // actually gets used as a wait, not skipped.
+    expect(rows[0].attempts).toBe(BACKOFF_SCHEDULE_MS.length + 1);
   });
 
   it("re-queues via the toast's Retry action: resets attempts/status and flushes immediately", async () => {
@@ -259,7 +284,7 @@ describe("dead-lettering", () => {
 
     const id = await enqueue("/api/contacts", "POST", { name: "Alex" });
     await flush();
-    for (let i = 0; i < BACKOFF_SCHEDULE_MS.length - 1; i++) {
+    for (let i = 0; i < BACKOFF_SCHEDULE_MS.length; i++) {
       await vi.advanceTimersByTimeAsync(BACKOFF_SCHEDULE_MS[i] + 1);
       await flush();
     }
@@ -351,7 +376,7 @@ describe("flush failure classification (review Important 1+2)", () => {
 
     expect(toast.error).toHaveBeenCalledTimes(1);
     const [message, options] = vi.mocked(toast.error).mock.calls[0];
-    expect(message).toBe("Couldn't save: mark loan returned — the server rejected this change");
+    expect(message).toBe("Couldn't mark loan returned — the server rejected this change");
     expect(options?.action).toBeUndefined();
 
     // Dead rows are never picked up again.
@@ -469,6 +494,40 @@ describe("describeOperation", () => {
   it("returns undefined for an unrecognized endpoint (generic toast fallback)", () => {
     expect(describeOperation("/api/unknown-thing", "POST", {})).toBeUndefined();
   });
+
+  it("names a book deletion", () => {
+    expect(describeOperation("/api/books/book-1", "DELETE", undefined)).toBe("delete a book");
+  });
+
+  it("names a tag removal from a book", () => {
+    expect(describeOperation("/api/books/book-1/tags/tag-1", "DELETE", undefined)).toBe("remove a tag");
+  });
+
+  it("names a shelf deletion", () => {
+    expect(describeOperation("/api/shelves/shelf-1", "DELETE", undefined)).toBe("delete a shelf");
+  });
+});
+
+describe("deadLetterMessage wording (review Minor: reads as broken English)", () => {
+  it("reads as a natural sentence for a retryable dead letter, not 'Couldn't save: <verb phrase>'", () => {
+    const row = { endpoint: "/api/books", method: "POST", body: { edition: { title: "Dune" } }, permanent: false } as never;
+    expect(deadLetterMessage(row)).toBe('Couldn\'t add "Dune"');
+  });
+
+  it("reads as a natural sentence for a permanent dead letter", () => {
+    const row = {
+      endpoint: "/api/loans/loan-1",
+      method: "PATCH",
+      body: { returned_date: "2026-01-01" },
+      permanent: true,
+    } as never;
+    expect(deadLetterMessage(row)).toBe("Couldn't mark loan returned — the server rejected this change");
+  });
+
+  it("falls back to a generic sentence when the operation can't be described", () => {
+    const row = { endpoint: "/api/unknown-thing", method: "POST", body: {}, permanent: false } as never;
+    expect(deadLetterMessage(row)).toBe("Couldn't save changes");
+  });
 });
 
 describe("dismiss / listDeadLettered / counts (Task 7)", () => {
@@ -478,7 +537,7 @@ describe("dismiss / listDeadLettered / counts (Task 7)", () => {
     vi.stubGlobal("fetch", fetchMock);
     const id = await enqueue(endpoint, method, body);
     await flush();
-    for (let i = 0; i < BACKOFF_SCHEDULE_MS.length - 1; i++) {
+    for (let i = 0; i < BACKOFF_SCHEDULE_MS.length; i++) {
       await vi.advanceTimersByTimeAsync(BACKOFF_SCHEDULE_MS[i] + 1);
       await flush();
     }

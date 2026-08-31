@@ -13,6 +13,7 @@ import { listLoans, createLoan, updateLoan } from "../lib/repo/loans.js";
 import { onMirrorChange } from "../lib/sync/shape.js";
 import { useUnsyncedIds } from "../lib/sync/use-unsynced-ids.js";
 import { friendlyError } from "../lib/error-messages.js";
+import { todayStr } from "../lib/local-date.js";
 import type {
   Book,
   Bookcase,
@@ -69,17 +70,6 @@ type Status = SharedReadingStatusRow;
 
 const NO_SHELF = "none";
 const NEW_CONTACT = "__new__";
-
-// toISOString() renders in UTC, so in any non-UTC timezone it can report
-// tomorrow's (or yesterday's) date depending on time of day. Same fix as
-// Loans.tsx's todayStr() / apps/api/src/lib/date.ts's dateStr().
-function todayStr(): string {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
 
 export function BookDetail() {
   const { bookId } = useParams<{ bookId: string }>();
