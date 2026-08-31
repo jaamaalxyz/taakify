@@ -77,6 +77,13 @@ loans.post("/", async (c) => {
     // edition.id for the same "inline-created row" client-id pattern.
     newContactId?: string;
     direction?: LoanDirection;
+    // Client-computed local calendar date (repo/loans.ts's todayStr()) for
+    // when the loan was made. Sent explicitly rather than relying on this
+    // column's `DEFAULT CURRENT_DATE` (migrations/0002_core.sql) -- that
+    // default evaluates in the server/container's timezone (likely UTC),
+    // which can disagree with the optimistic local PGlite row's browser-local
+    // date by a day once the two converge (Minor finding, PR #15 review).
+    outDate?: string;
     dueDate?: string;
   }>().catch(() => null);
 
@@ -123,10 +130,10 @@ loans.post("/", async (c) => {
     // Same client-supplied-id + upsert pattern for the loan row itself.
     const loanId = body.id ?? randomUUID();
     await client.query(
-      `INSERT INTO loan (id, household_id, book_id, contact_id, direction, due_date, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO loan (id, household_id, book_id, contact_id, direction, out_date, due_date, created_by)
+       VALUES ($1, $2, $3, $4, $5, COALESCE($6, CURRENT_DATE), $7, $8)
        ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id`,
-      [loanId, householdId, body.bookId, contactId, body.direction, body.dueDate ?? null, user.id]
+      [loanId, householdId, body.bookId, contactId, body.direction, body.outDate ?? null, body.dueDate ?? null, user.id]
     );
 
     const { rows } = await client.query(NESTED_SELECT + " WHERE l.id = $1 AND l.deleted_at IS NULL", [loanId]);

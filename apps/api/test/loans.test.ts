@@ -88,6 +88,21 @@ describe("loans", () => {
     expect(list.loans[0].id).toBe(created.body.loan.id);
   });
 
+  it("stores the client-supplied outDate instead of defaulting to the server clock's date", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const book = await addBook(cookie, house.id, "Dune");
+
+    const created = await createLoan(cookie, {
+      bookId: book.id,
+      contactName: "Alice",
+      direction: "lent_out",
+      outDate: "2020-06-15",
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.loan.out_date).toBe("2020-06-15");
+  });
+
   it("lends a book out reusing an existing contactId", async () => {
     const { cookie } = await signUp(app);
     const house = await createHousehold(cookie);

@@ -98,6 +98,21 @@ describe("createLoan atomicity (Important 3 regression)", () => {
     expect(outboxRows[0].body.newContactId).toBe(contactRows[0].id);
   });
 
+  it("sends outDate explicitly to the server, matching the optimistic local row (no server-clock timezone skew)", async () => {
+    const bookId = "00000000-0000-0000-0000-000000000026";
+    await seedBook(bookId);
+
+    const loanId = await createLoan({ bookId, contactName: "Riley", direction: "lent_out", createdBy: USER });
+
+    const { rows: loanRows } = await db.query<{ out_date: string }>(
+      "SELECT out_date::text AS out_date FROM loan WHERE id = $1",
+      [loanId]
+    );
+    const { rows: outboxRows } = await db.query<{ body: { outDate?: string } }>("SELECT body FROM outbox");
+    expect(outboxRows[0].body.outDate).toBeTruthy();
+    expect(loanRows[0].out_date).toBe(outboxRows[0].body.outDate);
+  });
+
   it("creating a loan with an existing contactId only writes the loan row (no contact insert)", async () => {
     const bookId = "00000000-0000-0000-0000-000000000022";
     const contactId = "00000000-0000-0000-0000-000000000023";
