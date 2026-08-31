@@ -4,6 +4,7 @@
 import { db, ready } from "../db/pglite.js";
 import { enqueue } from "../sync/outbox.js";
 import { OPTIMISTIC_UPDATED_AT } from "../sync/optimistic-clock.js";
+import { todayStr } from "../local-date.js";
 import type { Loan, LoanDirection, Ownership, WishlistPriority } from "@taakify/shared";
 
 type LoanRow = {
@@ -172,15 +173,17 @@ export async function createLoan(input: CreateLoanInput): Promise<string> {
   }
 
   const loanId = crypto.randomUUID();
+  const outDate = todayStr();
   statements.push({
     sql: `INSERT INTO loan (id, household_id, book_id, contact_id, direction, out_date, due_date, created_by, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, $6, $7, $8, $9)`,
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     params: [
       loanId,
       householdId,
       input.bookId,
       contactId,
       input.direction,
+      outDate,
       input.dueDate ?? null,
       input.createdBy,
       now,
@@ -198,6 +201,7 @@ export async function createLoan(input: CreateLoanInput): Promise<string> {
       contactName: input.contactName,
       newContactId,
       direction: input.direction,
+      outDate,
       dueDate: input.dueDate,
     },
     statements

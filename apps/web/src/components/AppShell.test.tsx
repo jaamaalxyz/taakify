@@ -1,7 +1,7 @@
 import { render, screen, waitFor, act } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { AppShell } from "./AppShell.js";
+import { AppShell, signOutWarningMessage } from "./AppShell.js";
 import { api } from "../lib/api.js";
 import { authClient } from "../lib/auth.js";
 import { db } from "../lib/db/pglite.js";
@@ -211,6 +211,12 @@ async function renderSyncedShell() {
   await screen.findByRole("heading", { name: "Library" });
 }
 
+describe("signOutWarningMessage (code review finding: pending/dead can both drop to 0 while the dialog is open)", () => {
+  it("never renders the literal string 'undefined' when both counts are 0", () => {
+    expect(signOutWarningMessage(0, 0)).not.toMatch(/undefined/);
+  });
+});
+
 describe("AppShell sign-out gating (Task 7)", () => {
   it("with an empty outbox, signs out immediately with no dialog", async () => {
     syncStatus.pending = 0;
@@ -231,6 +237,30 @@ describe("AppShell sign-out gating (Task 7)", () => {
     screen.getByRole("button", { name: "Sign out" }).click();
 
     expect(await screen.findByText(/You have 3 unsaved changes\. Sign out anyway\?/)).toBeInTheDocument();
+    expect(authClient.signOut).not.toHaveBeenCalled();
+  });
+
+  it("with only dead-lettered writes (no pending), still warns instead of signing out immediately", async () => {
+    syncStatus.pending = 0;
+    syncStatus.dead = 2;
+    await renderSyncedShell();
+
+    screen.getByRole("button", { name: "Sign out" }).click();
+
+    expect(await screen.findByText(/2 changes failed to save\. Sign out anyway\?/)).toBeInTheDocument();
+    expect(authClient.signOut).not.toHaveBeenCalled();
+  });
+
+  it("with both pending and dead-lettered writes, mentions both counts in the warning", async () => {
+    syncStatus.pending = 3;
+    syncStatus.dead = 1;
+    await renderSyncedShell();
+
+    screen.getByRole("button", { name: "Sign out" }).click();
+
+    expect(
+      await screen.findByText(/You have 3 unsaved changes and 1 change failed to save\. Sign out anyway\?/)
+    ).toBeInTheDocument();
     expect(authClient.signOut).not.toHaveBeenCalled();
   });
 

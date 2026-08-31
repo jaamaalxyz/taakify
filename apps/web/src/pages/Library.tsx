@@ -4,7 +4,7 @@ import { BookOpen } from "lucide-react";
 import { useHousehold } from "../lib/household-context.js";
 import { listBooks } from "../lib/repo/books.js";
 import { listTags } from "../lib/repo/tags.js";
-import { onMirrorChange } from "../lib/sync/shape.js";
+import { getSyncStalled, onMirrorChange, onSyncStalledChange } from "../lib/sync/shape.js";
 import { friendlyError } from "../lib/error-messages.js";
 import {
   OWNERSHIP_LABELS,
@@ -64,14 +64,27 @@ export function Library() {
   const [loadError, setLoadError] = useState("");
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  // True while the base (offset-0) query is in flight. Distinct from
+  // `books === null` (that no longer resets on refetch -- see the SWR
+  // comment below): guards `handleLoadMore` against firing mid-refetch with
+  // a stale `books.length` from the OLD filter's results against the NEW
+  // filter's params, which mixed the two filters' books together in the
+  // grid (Code review finding, PR #15 polish batch).
+  const [refetching, setRefetching] = useState(true);
   // Bumped whenever the local mirror changes underneath us (a remote edit
   // streaming in via Electric, or our own optimistic write) -- included in
   // the data-loading effect's deps below so a book added on another device
   // shows up here without the user having to navigate away and back
   // (Important finding, final whole-branch review).
   const [mirrorTick, setMirrorTick] = useState(0);
+  // Distinguishes a true "no books" empty state from "Electric is
+  // unreachable" -- otherwise a stalled first run reads as "your data is
+  // gone" instead of "we can't reach the server" (Minor finding, PR #15
+  // review).
+  const [stalled, setStalled] = useState(getSyncStalled);
 
   useEffect(() => onMirrorChange(() => setMirrorTick((t) => t + 1)), []);
+  useEffect(() => onSyncStalledChange(() => setStalled(getSyncStalled())), []);
 
   // Debounce the search box: wait 250ms after the user stops typing before
   // updating debouncedSearch, which is what actually drives the fetch below.
@@ -99,9 +112,13 @@ export function Library() {
   }
 
   useEffect(() => {
-    setBooks(null);
+    // Stale-while-revalidate: don't blank `books` here. A shape-stream
+    // catch-up (mirrorTick) or a filter change re-runs this effect, and
+    // resetting to null flashed the grid back to skeletons on every refetch
+    // even though the previous results are still valid to show while the
+    // new query is in flight (Minor finding, PR #15 review).
     setLoadError("");
-    setHasMore(false);
+    setRefetching(true);
 
     let cancelled = false;
     listBooks(buildOptions(0))
@@ -112,6 +129,9 @@ export function Library() {
       })
       .catch((e) => {
         if (!cancelled) setLoadError(friendlyError(e));
+      })
+      .finally(() => {
+        if (!cancelled) setRefetching(false);
       });
     return () => {
       cancelled = true;
@@ -120,7 +140,7 @@ export function Library() {
   }, [household.id, debouncedSearch, ownership, statusFilter, tagFilter, mirrorTick]);
 
   function handleLoadMore() {
-    if (!books) return;
+    if (!books || refetching) return;
     setLoadingMore(true);
     listBooks(buildOptions(books.length))
       .then((data) => {
@@ -205,7 +225,18 @@ export function Library() {
         </div>
       )}
 
-      {!loadError && books !== null && books.length === 0 && (
+      {!loadError && books !== null && books.length === 0 && stalled && (
+        <Card>
+          <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
+            <BookOpen className="h-8 w-8 text-muted-foreground" aria-hidden="true" />
+            <p className="text-sm text-muted-foreground">
+              Couldn't reach the server — your library will appear when reconnected.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {!loadError && books !== null && books.length === 0 && !stalled && (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
             <BookOpen className="h-8 w-8 text-muted-foreground" aria-hidden="true" />
@@ -226,7 +257,7 @@ export function Library() {
           </div>
           {hasMore && (
             <div className="flex justify-center">
-              <Button variant="outline" onClick={handleLoadMore} disabled={loadingMore}>
+              <Button variant="outline" onClick={handleLoadMore} disabled={loadingMore || refetching}>
                 {loadingMore ? "Loading…" : "Load more"}
               </Button>
             </div>

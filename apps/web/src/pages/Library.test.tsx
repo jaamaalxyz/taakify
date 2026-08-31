@@ -6,6 +6,7 @@ import { Library } from "./Library.js";
 import { listBooks, type ListBooksOptions } from "../lib/repo/books.js";
 import { listTags } from "../lib/repo/tags.js";
 import { useHousehold } from "../lib/household-context.js";
+import { getSyncStalled } from "../lib/sync/shape.js";
 
 vi.mock("../lib/repo/books.js", () => ({ listBooks: vi.fn() }));
 vi.mock("../lib/repo/tags.js", () => ({ listTags: vi.fn() }));
@@ -16,7 +17,11 @@ vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
 // singleton (idb://, browser-only) if not mocked -- stub it to a no-op
 // subscription, since these tests only exercise the mount/filter-driven
 // fetch, not mirror-change refresh itself.
-vi.mock("../lib/sync/shape.js", () => ({ onMirrorChange: () => () => {} }));
+vi.mock("../lib/sync/shape.js", () => ({
+  onMirrorChange: () => () => {},
+  getSyncStalled: vi.fn(() => false),
+  onSyncStalledChange: () => () => {},
+}));
 
 // Radix Select needs these DOM APIs, which jsdom doesn't implement, to open
 // its popover and register clicks on options.
@@ -68,6 +73,7 @@ function renderLibrary() {
 beforeEach(() => {
   vi.mocked(listBooks).mockReset();
   vi.mocked(listTags).mockReset();
+  vi.mocked(getSyncStalled).mockReturnValue(false);
   vi.mocked(useHousehold).mockReturnValue({
     user: { id: "u1", email: "a@b.com", name: "Ada" },
     household,
@@ -174,6 +180,39 @@ describe("Library", () => {
     expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
   });
 
+  it("disables Load more while a filter-change refetch is in flight, so it can't fetch the old filter's next page against new results", async () => {
+    const fullPage = Array.from({ length: 100 }, (_, i) => ({
+      ...bookA,
+      id: `b${i}`,
+      edition: { ...bookA.edition, title: `Book ${i}` },
+    }));
+
+    let resolveRefetch!: (books: unknown[]) => void;
+    let callCount = 0;
+    vi.mocked(listTags).mockResolvedValue([]);
+    vi.mocked(listBooks).mockImplementation(async () => {
+      callCount += 1;
+      if (callCount === 1) return fullPage as never;
+      return new Promise((resolve) => {
+        resolveRefetch = resolve as never;
+      }) as never;
+    });
+    renderLibrary();
+    expect(await screen.findByText("Book 0")).toBeInTheDocument();
+    const loadMoreButton = screen.getByRole("button", { name: "Load more" });
+    expect(loadMoreButton).toBeEnabled();
+
+    // Trigger a refetch via an ownership filter change; it never resolves in
+    // this test, simulating the window where the new filter's results
+    // haven't landed yet.
+    await userEvent.click(screen.getByRole("button", { name: "Owned" }));
+    await waitFor(() => expect(callCount).toBe(2));
+
+    expect(screen.getByRole("button", { name: "Load more" })).toBeDisabled();
+
+    resolveRefetch([]);
+  });
+
   it("does not show a Load more button when fewer than a full page comes back", async () => {
     mockRepo(() => [bookA]);
     renderLibrary();
@@ -188,6 +227,42 @@ describe("Library", () => {
 
     expect(await screen.findByText("No books yet.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Add your first book" })).toHaveAttribute("href", "/add");
+  });
+
+  it("shows a 'couldn't reach the server' empty state instead of 'No books yet' when sync is stalled", async () => {
+    vi.mocked(getSyncStalled).mockReturnValue(true);
+    mockRepo(() => []);
+    renderLibrary();
+
+    expect(await screen.findByText(/Couldn't reach the server/)).toBeInTheDocument();
+    expect(screen.queryByText("No books yet.")).not.toBeInTheDocument();
+  });
+
+  it("keeps previously loaded books visible during a refetch instead of flashing back to skeletons", async () => {
+    let resolveSecondFetch!: (books: unknown[]) => void;
+    let callCount = 0;
+    vi.mocked(listTags).mockResolvedValue([]);
+    vi.mocked(listBooks).mockImplementation(async () => {
+      callCount += 1;
+      if (callCount === 1) return [bookA] as never;
+      return new Promise((resolve) => {
+        resolveSecondFetch = resolve as never;
+      }) as never;
+    });
+    renderLibrary();
+    expect(await screen.findByText("Dune")).toBeInTheDocument();
+
+    // Trigger a refetch (ownership filter change re-runs the data-loading effect).
+    await userEvent.click(screen.getByRole("button", { name: "Owned" }));
+    await waitFor(() => expect(callCount).toBe(2));
+
+    // The second fetch is still pending -- the previously loaded book (and
+    // no skeleton grid) should still be showing, not a flash back to loading.
+    expect(screen.getByText("Dune")).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-slot="skeleton"]')).toHaveLength(0);
+
+    resolveSecondFetch([]);
+    await waitFor(() => expect(screen.getByText("No books yet.")).toBeInTheDocument());
   });
 
   it("shows a destructive alert when the fetch fails", async () => {
