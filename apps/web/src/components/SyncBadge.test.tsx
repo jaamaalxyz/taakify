@@ -134,4 +134,24 @@ describe("SyncBadge 'Sync issue' dialog", () => {
     await waitFor(() => expect(outbox.dismiss).toHaveBeenCalledWith("row-1"));
     await waitFor(() => expect(screen.queryByText("add contact Alex")).not.toBeInTheDocument());
   });
+
+  it("permanent (server-rejected) rows show why and offer no Retry, only Dismiss", async () => {
+    status.dead = 1;
+    outbox.listDeadLettered.mockResolvedValue([
+      {
+        id: "row-1",
+        endpoint: "/api/contacts",
+        method: "POST",
+        body: { name: "Alex" },
+        permanent: true,
+      },
+    ]);
+
+    render(<SyncBadge />);
+    screen.getByText("Sync issue").click();
+
+    expect(await screen.findByText("add contact Alex — the server rejected this change")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+  });
 });

@@ -30,6 +30,23 @@ import { db, ready } from "../db/pglite.js";
 // exact schedule without hardcoding numbers that could silently drift.
 export const BACKOFF_SCHEDULE_MS = [1000, 2000, 5000, 15000, 60000];
 
+// Per-request timeout for outbox replays. Rows flush sequentially and every
+// flush trigger (timer, `online`, sign-out) shares one in-flight promise,
+// so a single hung fetch on a flaky mobile connection -- exactly this app's
+// context -- would otherwise wedge the whole queue for as long as the
+// browser's own (minutes-long) fetch timeout. Aborting is safe even if the
+// request actually reached the server: every write route's idempotent
+// client-id upsert means a later replay converges instead of duplicating.
+export const FLUSH_FETCH_TIMEOUT_MS = 15_000;
+
+// How long a 401'd row waits before its next automatic attempt. A 401 means
+// the session expired -- retrying sooner just burns requests that are
+// guaranteed to fail the same way. The periodic worker timer picks the row
+// back up once this window elapses (or immediately via any successful
+// write/reset path if the user signs in again in the meantime). Exported
+// for the same drift-avoidance reason as BACKOFF_SCHEDULE_MS.
+export const AUTH_RETRY_DELAY_MS = 60_000;
+
 /**
  * An optimistic local write to apply in the same PGlite transaction as the
  * outbox insert, so the UI reflects a write before the server has
@@ -49,6 +66,11 @@ export type OutboxRow = {
   body: unknown;
   attempts: number;
   next_retry_at: string | null;
+  // Only meaningful once status = 'dead': true when the server returned a
+  // non-retryable 4xx (see isPermanentFailure) rather than the row exhausting
+  // the backoff schedule. Retrying a permanent failure replays the identical
+  // request, so the UI offers no Retry action for these.
+  permanent: boolean;
 };
 
 // --- Change notification ---------------------------------------------------
@@ -189,42 +211,94 @@ async function runFlushPass(): Promise<void> {
   const now = Date.now();
   const due = rows.filter((row) => !row.next_retry_at || new Date(row.next_retry_at).getTime() <= now);
   for (const row of due) {
-    await flushRow(row);
+    const outcome = await flushRow(row);
+    // A 401 means the session cookie is expired -- every remaining due row
+    // would fail identically, so stop the pass rather than hammering the
+    // API. The paused row's AUTH_RETRY_DELAY_MS window (and the periodic
+    // worker timer) resumes the queue once the user has signed in again.
+    if (outcome === "auth") break;
   }
 }
 
-async function flushRow(row: OutboxRow): Promise<void> {
-  let ok = false;
+/** What happened to one outbox row during a flush pass. */
+type FlushOutcome = "sent" | "retry" | "dead" | "auth";
+
+/**
+ * A 4xx response is a deterministic verdict on *this request* (bad body,
+ * validation failure, missing target, forbidden) -- replaying the identical
+ * request can't change it, so these dead-letter immediately instead of
+ * burning the full backoff schedule. 408 and 429 are the explicit
+ * "transient, try again later" 4xx statuses and stay retryable; 5xx stays
+ * retryable for the same reason (server-side trouble, not this request).
+ */
+function isPermanentFailure(status: number | undefined): boolean {
+  if (status === undefined) return false;
+  if (status === 408 || status === 429) return false;
+  return status >= 400 && status < 500;
+}
+
+// One toast per 401 episode, not one per 401'd row/pass: reset by any
+// successful send (the session works again), so the next expiry re-warns.
+let authToastShown = false;
+
+// For tests only -- resets the 401-episode flag so each test starts from a
+// clean slate (an earlier test's 401 episode otherwise suppresses this
+// one's toast).
+export function __resetAuthToastForTests(): void {
+  authToastShown = false;
+}
+
+async function flushRow(row: OutboxRow): Promise<FlushOutcome> {
+  let httpStatus: number | undefined;
   try {
     const res = await fetch(row.endpoint, {
       method: row.method,
       credentials: "include",
       headers: { "content-type": "application/json" },
       body: row.body == null ? undefined : JSON.stringify(parseBody(row.body)),
+      signal: AbortSignal.timeout(FLUSH_FETCH_TIMEOUT_MS),
     });
-    ok = res.ok;
+    httpStatus = res.status;
+    if (res.ok) {
+      await db.query(`DELETE FROM outbox WHERE id = $1`, [row.id]);
+      notifyOutboxChange();
+      authToastShown = false;
+      return "sent";
+    }
   } catch {
-    // Network failure (offline, DNS, etc.) -- treated the same as a
-    // non-2xx response: retry with backoff.
-    ok = false;
+    // Network failure (offline, DNS, or FLUSH_FETCH_TIMEOUT_MS aborting a
+    // hung connection) -- retry with backoff. If the aborted request did
+    // reach the server, the write routes' idempotent upserts make the
+    // replay converge rather than duplicate.
+    return scheduleRetry(row);
   }
 
-  if (ok) {
-    await db.query(`DELETE FROM outbox WHERE id = $1`, [row.id]);
-    notifyOutboxChange();
-    return;
-  }
-
-  const attempts = row.attempts + 1;
-  if (attempts >= BACKOFF_SCHEDULE_MS.length) {
-    await db.query(`UPDATE outbox SET attempts = $2, status = 'dead', next_retry_at = NULL WHERE id = $1`, [
+  if (httpStatus === 401) {
+    // Session expired. Not an attempt, not a dead letter: push the row's
+    // next try out by AUTH_RETRY_DELAY_MS and tell the user once -- their
+    // changes are safe locally and the queue resumes after re-auth.
+    await db.query(`UPDATE outbox SET next_retry_at = $2 WHERE id = $1`, [
       row.id,
-      attempts,
+      new Date(Date.now() + AUTH_RETRY_DELAY_MS).toISOString(),
     ]);
-    fireDeadLetterToast({ ...row, attempts });
     notifyOutboxChange();
-    return;
+    if (!authToastShown) {
+      authToastShown = true;
+      toast.error(
+        "Couldn't sync your changes — please sign in again. They're saved on this device and will retry automatically."
+      );
+    }
+    return "auth";
   }
+
+  if (isPermanentFailure(httpStatus)) return deadLetter(row, true);
+
+  return scheduleRetry(row);
+}
+
+async function scheduleRetry(row: OutboxRow): Promise<FlushOutcome> {
+  const attempts = row.attempts + 1;
+  if (attempts >= BACKOFF_SCHEDULE_MS.length) return deadLetter(row, false);
 
   const delayMs = BACKOFF_SCHEDULE_MS[attempts - 1];
   const nextRetryAt = new Date(Date.now() + delayMs).toISOString();
@@ -234,6 +308,18 @@ async function flushRow(row: OutboxRow): Promise<void> {
     nextRetryAt,
   ]);
   notifyOutboxChange();
+  return "retry";
+}
+
+async function deadLetter(row: OutboxRow, permanent: boolean): Promise<FlushOutcome> {
+  const attempts = row.attempts + 1;
+  await db.query(
+    `UPDATE outbox SET attempts = $2, status = 'dead', permanent = $3, next_retry_at = NULL WHERE id = $1`,
+    [row.id, attempts, permanent]
+  );
+  fireDeadLetterToast({ ...row, attempts, permanent });
+  notifyOutboxChange();
+  return "dead";
 }
 
 // jsonb columns generally round-trip as parsed objects through PGlite's
@@ -262,11 +348,17 @@ export function parseBody(raw: unknown): unknown {
  * (Task 7) until the user explicitly dismisses it there. This toast is
  * purely the "immediate awareness" layer; the badge list is the durable
  * one.
+ *
+ * Rows dead-lettered via a non-retryable 4xx (`permanent`) get the same
+ * toast minus the Retry action -- replaying an identical rejected request
+ * can't succeed, so offering it would just re-fail in front of the user.
  */
 function fireDeadLetterToast(row: OutboxRow): void {
-  const description = describeOperation(row.endpoint, row.method, parseBody(row.body));
-  const message = description ? `Couldn't save: ${description}` : "Couldn't save changes";
-  toast.error(message, {
+  if (row.permanent) {
+    toast.error(deadLetterMessage(row));
+    return;
+  }
+  toast.error(deadLetterMessage(row), {
     action: {
       label: "Retry",
       onClick: () => {
@@ -274,6 +366,22 @@ function fireDeadLetterToast(row: OutboxRow): void {
       },
     },
   });
+}
+
+/**
+ * Human-readable message for a dead-lettered row: the operation description
+ * from `describeOperation`, prefixed for toasts and suffixed for permanent
+ * (server-rejected) rows. Shared by the toast here and SyncBadge's dialog
+ * so the two surfaces never drift apart in wording.
+ */
+export function deadLetterMessage(row: OutboxRow): string {
+  const description = describeOperation(row.endpoint, row.method, parseBody(row.body));
+  if (row.permanent) {
+    return description
+      ? `Couldn't save: ${description} — the server rejected this change`
+      : "Couldn't save — the server rejected this change";
+  }
+  return description ? `Couldn't save: ${description}` : "Couldn't save changes";
 }
 
 /**
@@ -335,13 +443,13 @@ export async function listDismissedTouchedEntities(): Promise<TouchedEntity[]> {
 
 /**
  * Dead-lettered rows only (not `dismissed` ones) -- the list `SyncBadge`
- * renders in its "Sync issue" dialog, each entry describable via
- * `describeOperation(endpoint, method, body)`.
+ * renders in its "Sync issue" dialog, each entry labeled via
+ * `deadLetterMessage(row)` (with Retry hidden for `permanent` rows).
  */
 export async function listDeadLettered(): Promise<OutboxRow[]> {
   await ready;
   const { rows } = await db.query<OutboxRow>(
-    `SELECT id, endpoint, method, body, attempts, next_retry_at FROM outbox
+    `SELECT id, endpoint, method, body, attempts, next_retry_at, permanent FROM outbox
      WHERE status = 'dead'
      ORDER BY created_at ASC`
   );

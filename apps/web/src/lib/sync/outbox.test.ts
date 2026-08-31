@@ -39,7 +39,9 @@ import {
   describeOperation,
   startOutboxWorker,
   __resetOutboxWorkerForTests,
+  __resetAuthToastForTests,
   BACKOFF_SCHEDULE_MS,
+  AUTH_RETRY_DELAY_MS,
 } from "./outbox.js";
 
 const HOUSEHOLD = "00000000-0000-0000-0000-00000000000a";
@@ -62,6 +64,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   __resetOutboxWorkerForTests();
+  __resetAuthToastForTests();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -294,6 +297,159 @@ describe("dead-lettering", () => {
       "00000000-0000-0000-0000-000000000020",
     ]);
     expect(rows).toHaveLength(0);
+  });
+});
+
+describe("flush failure classification (review Important 1+2)", () => {
+  it("passes an AbortSignal timeout on every replayed request", async () => {
+    let capturedInit: RequestInit | undefined;
+    const fetchMock = vi.fn().mockImplementation((_endpoint: string, init?: RequestInit) => {
+      capturedInit = init;
+      return Promise.resolve({ ok: true, status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await enqueue("/api/contacts", "POST", { name: "Alex" });
+    await flush();
+
+    expect(capturedInit?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("treats a fetch abort/timeout like a network failure: retry with backoff, not dead-letter", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValue(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const id = await enqueue("/api/loans", "POST", { book_id: "b1" });
+    await flush();
+
+    const { rows } = await db.query<{ attempts: number; status: string; permanent: boolean }>(
+      `SELECT attempts, status, permanent FROM outbox WHERE id = $1`,
+      [id]
+    );
+    expect(rows[0].attempts).toBe(1);
+    expect(rows[0].status).toBe("pending");
+    expect(rows[0].permanent).toBe(false);
+  });
+
+  it("dead-letters a 4xx immediately on the first failure, marked permanent, with a no-Retry toast", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 400 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const id = await enqueue("/api/loans/loan-1", "PATCH", { returned_date: "2026-01-01" });
+    await flush();
+
+    const { rows } = await db.query<{ attempts: number; status: string; permanent: boolean; next_retry_at: string | null }>(
+      `SELECT attempts, status, permanent, next_retry_at FROM outbox WHERE id = $1`,
+      [id]
+    );
+    expect(rows[0].status).toBe("dead");
+    expect(rows[0].attempts).toBe(1);
+    expect(rows[0].permanent).toBe(true);
+    expect(rows[0].next_retry_at).toBeNull();
+
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    const [message, options] = vi.mocked(toast.error).mock.calls[0];
+    expect(message).toBe("Couldn't save: mark loan returned — the server rejected this change");
+    expect(options?.action).toBeUndefined();
+
+    // Dead rows are never picked up again.
+    fetchMock.mockClear();
+    await flush();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps 408 and 429 retryable (transient-by-definition 4xx statuses)", async () => {
+    for (const status of [408, 429]) {
+      await db.exec("DELETE FROM outbox");
+      vi.clearAllMocks();
+      const fetchMock = vi.fn().mockResolvedValue({ ok: false, status });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const id = await enqueue("/api/loans", "POST", { book_id: "b1" });
+      await flush();
+
+      const { rows } = await db.query<{ attempts: number; status: string; permanent: boolean }>(
+        `SELECT attempts, status, permanent FROM outbox WHERE id = $1`,
+        [id]
+      );
+      expect(rows[0].attempts).toBe(1);
+      expect(rows[0].status).toBe("pending");
+      expect(rows[0].permanent).toBe(false);
+    }
+  });
+
+  it("pauses on 401 without consuming attempts, toasts once per episode, and resumes after the auth window", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 401 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const id = await enqueue("/api/contacts", "POST", { name: "Alex" });
+    const before = Date.now();
+    await flush();
+
+    // Not an attempt, not a dead letter: the row waits out the auth window.
+    const { rows } = await db.query<{ attempts: number; status: string; next_retry_at: string }>(
+      `SELECT attempts, status, next_retry_at FROM outbox WHERE id = $1`,
+      [id]
+    );
+    expect(rows[0].attempts).toBe(0);
+    expect(rows[0].status).toBe("pending");
+    expect(new Date(rows[0].next_retry_at).getTime()).toBe(before + AUTH_RETRY_DELAY_MS);
+
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(toast.error).mock.calls[0][0]).toContain("sign in again");
+
+    // Not due again until the auth window elapses; still-toastless while paused.
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(AUTH_RETRY_DELAY_MS + 1);
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(toast.error).toHaveBeenCalledTimes(1); // same episode, no re-toast
+  });
+
+  it("a 401 stops the flush pass: later due rows are not sent behind it", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 401 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Seeded directly (not via enqueue) so both rows exist before the one
+    // pass under test runs -- enqueue() fires its own background flush,
+    // which would process the first row in an earlier, separate pass.
+    await db.query(
+      `INSERT INTO outbox (id, endpoint, method, status) VALUES
+       ('00000000-0000-0000-0000-000000000040', '/api/contacts', 'POST', 'pending'),
+       ('00000000-0000-0000-0000-000000000041', '/api/tags', 'POST', 'pending')`
+    );
+    await flush();
+
+    // Whichever row went first 401'd and broke the pass; the other must
+    // not have been attempted.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a successful send resets the 401 episode, so a later expiry toasts again", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 401 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Episode 1.
+    await enqueue("/api/contacts", "POST", { name: "Alex" });
+    await flush();
+    expect(toast.error).toHaveBeenCalledTimes(1);
+
+    // The session recovers and the paused row goes through.
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+    await vi.advanceTimersByTimeAsync(AUTH_RETRY_DELAY_MS + 1);
+    await flush();
+    expect(await countPending()).toBe(0);
+
+    // Episode 2 warns again.
+    fetchMock.mockResolvedValue({ ok: false, status: 401 });
+    await enqueue("/api/tags", "POST", { name: "sci-fi" });
+    await flush();
+    expect(toast.error).toHaveBeenCalledTimes(2);
   });
 });
 

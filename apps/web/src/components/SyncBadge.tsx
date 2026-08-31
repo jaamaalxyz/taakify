@@ -5,6 +5,14 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogT
 import { describeOperation, dismiss, listDeadLettered, parseBody, retry, type OutboxRow } from "../lib/sync/outbox.js";
 import { useSyncStatus } from "../lib/sync/use-sync-status.js";
 
+// Label for one dead-lettered row in the dialog. Retryable rows show the
+// bare operation description ("mark loan returned"); permanent ones (server
+// returned a non-retryable 4xx) append why there's no Retry button.
+function rowLabel(row: OutboxRow): string {
+  const description = describeOperation(row.endpoint, row.method, parseBody(row.body)) ?? "a change";
+  return row.permanent ? `${description} — the server rejected this change` : description;
+}
+
 // State precedence (the brief leaves this to judgment): dead-lettered rows
 // take precedence over both "Offline" and "Saving...". Those rows are
 // permanently failed and need an explicit Retry/Dismiss decision regardless
@@ -61,13 +69,13 @@ export function SyncBadge() {
             ) : (
               rows.map((row) => (
                 <div key={row.id} className="flex items-center justify-between gap-2 rounded-md border p-2">
-                  <span className="text-sm">
-                    {describeOperation(row.endpoint, row.method, parseBody(row.body)) ?? "Couldn't save changes"}
-                  </span>
+                  <span className="text-sm">{rowLabel(row)}</span>
                   <div className="flex shrink-0 gap-2">
-                    <Button size="sm" variant="outline" onClick={() => void handleRetry(row.id)}>
-                      Retry
-                    </Button>
+                    {!row.permanent && (
+                      <Button size="sm" variant="outline" onClick={() => void handleRetry(row.id)}>
+                        Retry
+                      </Button>
+                    )}
                     <Button size="sm" variant="ghost" onClick={() => void handleDismiss(row.id)}>
                       Dismiss
                     </Button>

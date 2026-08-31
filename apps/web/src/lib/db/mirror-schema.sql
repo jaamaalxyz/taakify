@@ -162,13 +162,19 @@ CREATE TABLE IF NOT EXISTS outbox (
   created_at timestamptz NOT NULL DEFAULT now(),
   attempts int NOT NULL DEFAULT 0,
   next_retry_at timestamptz,
-  status text NOT NULL DEFAULT 'pending'
+  status text NOT NULL DEFAULT 'pending',
+  -- True when the row dead-lettered because the server returned a
+  -- non-retryable 4xx (validation, authorization, not-found) rather than
+  -- by exhausting the backoff schedule. SyncBadge hides the Retry action
+  -- for these rows -- replaying the identical request can't succeed.
+  permanent boolean NOT NULL DEFAULT false
 );
 
--- Additive migration for local mirrors created before `touched` existed
+-- Additive migrations for local mirrors created before the column existed
 -- (this schema has no separate migration-tracking mechanism -- see the
 -- file header comment -- so an ALTER ... ADD COLUMN IF NOT EXISTS
 -- alongside the CREATE TABLE IF NOT EXISTS above is how a column gets
--- added to an already-persisted browser database). A no-op on a fresh
--- mirror, where the CREATE TABLE above already includes the column.
+-- added to an already-persisted browser database). No-ops on a fresh
+-- mirror, where the CREATE TABLE above already includes the columns.
 ALTER TABLE outbox ADD COLUMN IF NOT EXISTS touched jsonb;
+ALTER TABLE outbox ADD COLUMN IF NOT EXISTS permanent boolean NOT NULL DEFAULT false;
