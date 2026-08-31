@@ -422,16 +422,16 @@ export async function dismiss(id: string): Promise<void> {
  * write", only "the write to replay" -- reverting cleanly would need that
  * too) -- this is the documented minimal fix instead: every enqueue() call
  * now records which mirror row(s) it touched (`outbox.touched`, see
- * deriveTouchedEntities above), so a dismissed row's touched entities are
- * queryable here. No UI currently renders this (that's the documented
- * follow-up -- e.g. an "unsynced" badge on the affected book/loan/etc.),
- * but the data needed to build one now exists and survives dismissal (a
- * dismissed outbox row is never deleted, only marked).
+ * deriveTouchedEntities above), so a dismissed OR dead row's touched
+ * entities are queryable here (issue #16: surface unsynced rows). A
+ * `pending` row is deliberately excluded -- it hasn't failed permanently
+ * yet, and the outbox row is deleted outright once it succeeds, so there's
+ * nothing left to flag once it does.
  */
-export async function listDismissedTouchedEntities(): Promise<TouchedEntity[]> {
+export async function listUnsyncedTouchedEntities(): Promise<TouchedEntity[]> {
   await ready;
   const { rows } = await db.query<{ touched: TouchedEntity[] | string | null }>(
-    `SELECT touched FROM outbox WHERE status = 'dismissed' AND touched IS NOT NULL`
+    `SELECT touched FROM outbox WHERE status IN ('dead', 'dismissed') AND touched IS NOT NULL`
   );
   const entities: TouchedEntity[] = [];
   for (const row of rows) {

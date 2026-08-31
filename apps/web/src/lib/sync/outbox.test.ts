@@ -32,7 +32,7 @@ import {
   retry,
   dismiss,
   listDeadLettered,
-  listDismissedTouchedEntities,
+  listUnsyncedTouchedEntities,
   countPending,
   countDead,
   onOutboxChange,
@@ -630,24 +630,43 @@ describe("dismiss / listDeadLettered / counts (Task 7)", () => {
     expect(rows[0].touched).toBeNull();
   });
 
-  it("listDismissedTouchedEntities returns touched entities only for dismissed rows", async () => {
-    const bookId = "00000000-0000-0000-0000-000000000033";
-    await seedBook(bookId);
+  it("listUnsyncedTouchedEntities returns touched entities for dismissed AND dead rows, not pending ones", async () => {
+    const dismissedBookId = "00000000-0000-0000-0000-000000000033";
+    const deadBookId = "00000000-0000-0000-0000-000000000035";
+    await seedBook(dismissedBookId);
+    await seedBook(deadBookId);
 
-    const dismissedId = await enqueue(`/api/books/${bookId}`, "PATCH", { do_not_lend: true }, {
+    const dismissedId = await enqueue(`/api/books/${dismissedBookId}`, "PATCH", { do_not_lend: true }, {
       sql: `UPDATE book SET do_not_lend = $2 WHERE id = $1`,
-      params: [bookId, true],
+      params: [dismissedBookId, true],
     });
-    // Not dismissed -- must not show up.
-    await enqueue("/api/contacts", "POST", { name: "Alex" }, {
-      sql: `INSERT INTO contact (id, household_id, name, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, now(), now())`,
-      params: ["00000000-0000-0000-0000-000000000034", HOUSEHOLD, "Alex", "user-1"],
-    });
-
     await dismiss(dismissedId);
 
-    const entities = await listDismissedTouchedEntities();
-    expect(entities).toEqual([{ table: "book", id: bookId }]);
+    // A row that reached 'dead' status without being dismissed -- direct
+    // insert (same pattern as the "retry() directly resets..." test above)
+    // to avoid re-deriving the whole backoff-exhaustion dance here.
+    await db.query(
+      `INSERT INTO outbox (id, endpoint, method, body, status, touched)
+       VALUES ('00000000-0000-0000-0000-000000000036', '/api/books/${deadBookId}', 'PATCH', '{}'::jsonb, 'dead', $1::jsonb)`,
+      [JSON.stringify([{ table: "book", id: deadBookId }])]
+    );
+
+    // Still pending -- must not show up (it hasn't failed permanently, and
+    // the outbox row itself will be deleted once it succeeds).
+    const pendingBookId = "00000000-0000-0000-0000-000000000037";
+    await seedBook(pendingBookId);
+    await enqueue(`/api/books/${pendingBookId}`, "PATCH", { do_not_lend: true }, {
+      sql: `UPDATE book SET do_not_lend = $2 WHERE id = $1`,
+      params: [pendingBookId, true],
+    });
+
+    const entities = await listUnsyncedTouchedEntities();
+    expect(entities.sort((a, b) => a.id.localeCompare(b.id))).toEqual(
+      [
+        { table: "book", id: dismissedBookId },
+        { table: "book", id: deadBookId },
+      ].sort((a, b) => a.id.localeCompare(b.id))
+    );
   });
 });
 

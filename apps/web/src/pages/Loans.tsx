@@ -7,12 +7,14 @@ import { listLoans, createLoan, updateLoan } from "../lib/repo/loans.js";
 import { listContacts, createContact, updateContact } from "../lib/repo/contacts.js";
 import { listBooks } from "../lib/repo/books.js";
 import { onMirrorChange } from "../lib/sync/shape.js";
+import { useUnsyncedIds } from "../lib/sync/use-unsynced-ids.js";
 import { friendlyError } from "../lib/error-messages.js";
 import { LOAN_DIRECTION_LABELS, type LoanDirection as Direction } from "../lib/labels.js";
 import type { Loan as SharedLoan, Contact as SharedContact } from "@taakify/shared";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Badge } from "../components/ui/badge.js";
+import { UnsyncedBadge } from "../components/UnsyncedBadge.js";
 import { Button } from "../components/ui/button.js";
 import { Label } from "../components/ui/label.js";
 import { Input } from "../components/ui/input.js";
@@ -57,11 +59,13 @@ function LoanRow({
   showReturnAction,
   onMarkReturned,
   returning,
+  unsynced,
 }: {
   loan: Loan;
   showReturnAction: boolean;
   onMarkReturned?: (id: string) => void;
   returning?: boolean;
+  unsynced?: boolean;
 }) {
   return (
     <li className="flex items-center gap-3 rounded-lg border p-3">
@@ -81,6 +85,7 @@ function LoanRow({
           {loan.due_date && ` · due ${loan.due_date}`}
         </p>
         {loan.overdue && <Badge variant="destructive">Overdue</Badge>}
+        {unsynced && <UnsyncedBadge subject="loan" />}
       </div>
       {showReturnAction && (
         <Button size="sm" variant="outline" onClick={() => onMarkReturned?.(loan.id)} disabled={returning}>
@@ -93,6 +98,7 @@ function LoanRow({
 
 export function Loans() {
   const { household, user } = useHousehold();
+  const unsyncedLoanIds = useUnsyncedIds("loan");
 
   const [loans, setLoans] = useState<Loan[] | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -504,6 +510,7 @@ export function Loans() {
                     showReturnAction
                     onMarkReturned={handleMarkReturned}
                     returning={returningId === loan.id}
+                    unsynced={unsyncedLoanIds.has(loan.id)}
                   />
                 ))}
               </ul>
@@ -518,7 +525,12 @@ export function Loans() {
             {historyLoans.length > 0 && (
               <ul className="space-y-2">
                 {historyLoans.map((loan) => (
-                  <LoanRow key={loan.id} loan={loan} showReturnAction={false} />
+                  <LoanRow
+                    key={loan.id}
+                    loan={loan}
+                    showReturnAction={false}
+                    unsynced={unsyncedLoanIds.has(loan.id)}
+                  />
                 ))}
               </ul>
             )}

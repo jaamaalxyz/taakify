@@ -55,6 +55,12 @@ vi.mock("./lib/sync/use-sync-status.js", () => ({
   useSyncStatus: () => ({ online: true, pending: 0, dead: 0 }),
 }));
 
+// Same rationale as use-sync-status.js above: Library's "Unsynced" badge
+// (issue #16) reads the real PGlite outbox table too.
+vi.mock("./lib/sync/use-unsynced-ids.js", () => ({
+  useUnsyncedIds: () => new Set<string>(),
+}));
+
 const me = {
   user: { id: "u1", email: "a@b.com", name: "Ada" },
   memberships: [{ household_id: "h1", role: "owner", household_name: "Family Library" }],
