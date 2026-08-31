@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { randomUUID } from "node:crypto";
 import { withUser } from "../db/tenant.js";
 import { requireUser, type SessionUser } from "../middleware/session.js";
 
@@ -32,17 +33,29 @@ tags.get("/", async (c) => {
 // "already exists" and returns the existing row (200) instead of an error.
 tags.post("/", async (c) => {
   const user = c.get("user");
-  const body = await c.req.json<{ householdId?: string; name?: string }>().catch(() => ({}) as { householdId?: string; name?: string });
+  const body = await c.req.json<{ id?: string; householdId?: string; name?: string }>().catch(() => ({}) as { id?: string; householdId?: string; name?: string });
   if (!body.householdId || !body.name) return c.json({ error: "householdId and name required" }, 400);
 
+  // Client-supplied id + upsert (see books.ts's POST / for the full
+  // rationale): ON CONFLICT (id) covers a retry of the SAME create (outbox
+  // resending a row that already landed). It does NOT cover — and can't,
+  // since a single INSERT can only target one arbiter — a genuine
+  // tag_live_uniq (household_id, name) collision from a DIFFERENT id (e.g.
+  // two members independently create a tag with the same name while
+  // offline, so their optimistic local ids differ). That case still raises
+  // a real 23505 and falls through to the existing get-existing-by-name
+  // fallback below, same as before this change.
+  //
   // A unique-violation aborts the transaction it happens in (Postgres
   // 25P02'd any further query in the same tx), so the get-existing fallback
   // runs in a fresh withUser call rather than inline in the same one.
   const insertResult = await withUser(user.id, async (client) => {
     const { rows } = await client.query(
-      `INSERT INTO tag (household_id, name, created_by)
-       VALUES ($1, $2, $3) RETURNING id, name, updated_at`,
-      [body.householdId, body.name, user.id]
+      `INSERT INTO tag (id, household_id, name, created_by)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
+       RETURNING id, name, updated_at`,
+      [body.id ?? randomUUID(), body.householdId, body.name, user.id]
     );
     return rows[0];
   }).catch((err) => {
@@ -92,11 +105,18 @@ bookTags.get("/:bookId/tags", async (c) => {
   return c.json({ tags: result });
 });
 
-// POST /api/books/:bookId/tags — body {tagId}
+// POST /api/books/:bookId/tags — body {id?, tagId}. `id` is the same
+// client-supplied-id story as every other create endpoint in this fix round
+// (see books.ts's POST / for the full rationale): the outbox's optimistic
+// local INSERT into book_tag generates its own id up front
+// (repo/tags.ts's attachBookTag), and without sending it here the server
+// would generate a DIFFERENT one via book_tag's DEFAULT gen_random_uuid(),
+// permanently duplicating the row once Electric syncs the real one down
+// under a different id (Critical 3, final review fix round).
 bookTags.post("/:bookId/tags", async (c) => {
   const user = c.get("user");
   const bookId = c.req.param("bookId");
-  const body = await c.req.json<{ tagId?: string }>().catch(() => ({}) as { tagId?: string });
+  const body = await c.req.json<{ id?: string; tagId?: string }>().catch(() => ({}) as { id?: string; tagId?: string });
   if (!body.tagId) return c.json({ error: "tagId is required" }, 400);
 
   const result = await withUser(user.id, async (client) => {
@@ -118,9 +138,11 @@ bookTags.post("/:bookId/tags", async (c) => {
     if (!tagRows[0] || tagRows[0].household_id !== householdId) return "not_found" as const;
 
     const { rows } = await client.query(
-      `INSERT INTO book_tag (household_id, book_id, tag_id)
-       VALUES ($1, $2, $3) RETURNING id, book_id, tag_id, updated_at`,
-      [householdId, bookId, body.tagId]
+      `INSERT INTO book_tag (id, household_id, book_id, tag_id)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
+       RETURNING id, book_id, tag_id, updated_at`,
+      [body.id ?? randomUUID(), householdId, bookId, body.tagId]
     );
     return rows[0];
   }).catch((err) => {

@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { randomUUID } from "node:crypto";
 import { withUser } from "../db/tenant.js";
 import { requireUser, type SessionUser } from "../middleware/session.js";
 
@@ -47,14 +48,19 @@ bookcases.get("/", async (c) => {
 // POST /api/bookcases — body {householdId, name}
 bookcases.post("/", async (c) => {
   const user = c.get("user");
-  const body = await c.req.json<{ householdId?: string; name?: string }>().catch(() => ({}) as { householdId?: string; name?: string });
+  const body = await c.req.json<{ id?: string; householdId?: string; name?: string }>().catch(() => ({}) as { id?: string; householdId?: string; name?: string });
   if (!body.householdId || !body.name) return c.json({ error: "householdId and name required" }, 400);
 
   const result = await withUser(user.id, async (client) => {
+    // Client-supplied id + upsert: see books.ts's POST / for the full
+    // rationale (repo/shelves.ts's optimistic local INSERT generates the
+    // id up front so the mirror row and the server row converge on sync).
     const { rows } = await client.query(
-      `INSERT INTO bookcase (household_id, name, created_by)
-       VALUES ($1, $2, $3) RETURNING id, name, updated_at`,
-      [body.householdId, body.name, user.id]
+      `INSERT INTO bookcase (id, household_id, name, created_by)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
+       RETURNING id, name, updated_at`,
+      [body.id ?? randomUUID(), body.householdId, body.name, user.id]
     );
     return rows[0];
   }).catch((err) => {
@@ -69,7 +75,7 @@ bookcases.post("/", async (c) => {
 bookcases.post("/:id/shelves", async (c) => {
   const user = c.get("user");
   const bookcaseId = c.req.param("id");
-  const body = await c.req.json<{ label?: string }>().catch(() => ({}) as { label?: string });
+  const body = await c.req.json<{ id?: string; label?: string }>().catch(() => ({}) as { id?: string; label?: string });
 
   const result = await withUser(user.id, async (client) => {
     // Lock the parent bookcase row first so concurrent POSTs to the same
@@ -84,16 +90,35 @@ bookcases.post("/:id/shelves", async (c) => {
     if (!bcRows[0]) return "not_found" as const;
     const householdId = bcRows[0].household_id;
 
+    // If this is a retry of an outbox row whose shelf already landed (same
+    // client-supplied id), skip recomputing MAX(position) entirely — an
+    // ON CONFLICT DO UPDATE below would otherwise leave the row's real
+    // position untouched anyway, but recomputing a *new* position here
+    // first would be wasted work (and, if some other shelf was concurrently
+    // deleted, subtly wrong to compute even though it's discarded).
+    const shelfId = body.id ?? randomUUID();
+    if (body.id) {
+      const { rows: existing } = await client.query(
+        "SELECT id, position, label, updated_at FROM shelf WHERE id = $1 AND deleted_at IS NULL",
+        [shelfId]
+      );
+      if (existing[0]) return existing[0];
+    }
+
     const { rows: posRows } = await client.query(
       "SELECT COALESCE(MAX(position), 0) + 1 AS next_position FROM shelf WHERE bookcase_id = $1 AND deleted_at IS NULL",
       [bookcaseId]
     );
     const position = posRows[0].next_position;
 
+    // Client-supplied id + upsert: see books.ts's POST / for the full
+    // rationale.
     const { rows } = await client.query(
-      `INSERT INTO shelf (household_id, bookcase_id, position, label, created_by)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id, position, label, updated_at`,
-      [householdId, bookcaseId, position, body.label ?? null, user.id]
+      `INSERT INTO shelf (id, household_id, bookcase_id, position, label, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
+       RETURNING id, position, label, updated_at`,
+      [shelfId, householdId, bookcaseId, position, body.label ?? null, user.id]
     );
     return rows[0];
   }).catch((err) => {

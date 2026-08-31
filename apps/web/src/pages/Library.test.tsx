@@ -3,14 +3,20 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach, beforeAll } from "vitest";
 import { Library } from "./Library.js";
-import { api } from "../lib/api.js";
+import { listBooks, type ListBooksOptions } from "../lib/repo/books.js";
+import { listTags } from "../lib/repo/tags.js";
 import { useHousehold } from "../lib/household-context.js";
 
-vi.mock("../lib/api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/api.js")>();
-  return { ...actual, api: vi.fn() };
-});
+vi.mock("../lib/repo/books.js", () => ({ listBooks: vi.fn() }));
+vi.mock("../lib/repo/tags.js", () => ({ listTags: vi.fn() }));
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
+// Library now subscribes to mirror-change notifications (Important finding,
+// final whole-branch review) so remote edits refresh the list without a
+// manual navigate-away-and-back. shape.js pulls in the real db/pglite.js
+// singleton (idb://, browser-only) if not mocked -- stub it to a no-op
+// subscription, since these tests only exercise the mount/filter-driven
+// fetch, not mirror-change refresh itself.
+vi.mock("../lib/sync/shape.js", () => ({ onMirrorChange: () => () => {} }));
 
 // Radix Select needs these DOM APIs, which jsdom doesn't implement, to open
 // its popover and register clicks on options.
@@ -41,14 +47,14 @@ const bookA = {
   edition: { id: "e1", title: "Dune", authors: "Frank Herbert", cover_url: null, isbn: null, language: "en" },
 };
 
-// Default mock: /api/tags resolves empty (populates the tag filter), and
-// /api/books resolves via whatever handler the test passes in.
-function mockApi(booksHandler: (path: string) => unknown, tags: { id: string; name: string; updated_at: string }[] = []) {
-  vi.mocked(api).mockImplementation(async (path: string) => {
-    if (path.startsWith("/api/tags")) return { tags };
-    if (path.startsWith("/api/books")) return booksHandler(path);
-    throw new Error(`unexpected call: ${path}`);
-  });
+// Default mock: listTags resolves empty (populates the tag filter), and
+// listBooks resolves via whatever handler the test passes in.
+function mockRepo(
+  booksHandler: (opts: ListBooksOptions) => unknown,
+  tags: { id: string; name: string; updated_at: string }[] = []
+) {
+  vi.mocked(listTags).mockResolvedValue(tags);
+  vi.mocked(listBooks).mockImplementation(async (opts) => booksHandler(opts) as never);
 }
 
 function renderLibrary() {
@@ -60,7 +66,8 @@ function renderLibrary() {
 }
 
 beforeEach(() => {
-  vi.mocked(api).mockReset();
+  vi.mocked(listBooks).mockReset();
+  vi.mocked(listTags).mockReset();
   vi.mocked(useHousehold).mockReturnValue({
     user: { id: "u1", email: "a@b.com", name: "Ada" },
     household,
@@ -69,72 +76,80 @@ beforeEach(() => {
 });
 
 describe("Library", () => {
-  it("renders a list of books from the API", async () => {
-    mockApi(() => ({ books: [bookA] }));
+  it("renders a list of books from the repo", async () => {
+    mockRepo(() => [bookA]);
     renderLibrary();
 
     expect(await screen.findByText("Dune")).toBeInTheDocument();
     expect(screen.getByText("Frank Herbert")).toBeInTheDocument();
-    expect(api).toHaveBeenCalledWith(`/api/books?householdId=${household.id}`);
+    expect(listBooks).toHaveBeenCalledWith(
+      expect.objectContaining({ householdId: household.id, q: undefined, offset: undefined })
+    );
   });
 
-  it("debounces the search input before calling the API with q", async () => {
-    mockApi(() => ({ books: [] }));
+  it("debounces the search input before calling listBooks with q", async () => {
+    mockRepo(() => []);
     renderLibrary();
 
     // Initial fetch on mount.
-    await waitFor(() => expect(api).toHaveBeenCalledWith(`/api/books?householdId=${household.id}`));
+    await waitFor(() =>
+      expect(listBooks).toHaveBeenCalledWith(expect.objectContaining({ q: undefined }))
+    );
 
     await userEvent.type(screen.getByLabelText("Search books"), "dune");
 
-    // Debounced: eventually (250ms later) fires with ?q=dune, not before.
+    // Debounced: eventually (250ms later) fires with q: "dune", not before.
     await waitFor(
-      () => expect(api).toHaveBeenLastCalledWith(`/api/books?householdId=${household.id}&q=dune`),
+      () => expect(listBooks).toHaveBeenLastCalledWith(expect.objectContaining({ q: "dune" })),
       { timeout: 2000 }
     );
   });
 
-  it("calls the API with ownership when a filter chip is selected", async () => {
-    mockApi(() => ({ books: [] }));
+  it("calls listBooks with ownership when a filter chip is selected", async () => {
+    mockRepo(() => []);
     renderLibrary();
-    await waitFor(() => expect(api).toHaveBeenCalledWith(`/api/books?householdId=${household.id}`));
+    await waitFor(() => expect(listBooks).toHaveBeenCalled());
 
     await userEvent.click(screen.getByRole("button", { name: "Owned" }));
 
     await waitFor(() =>
-      expect(api).toHaveBeenLastCalledWith(`/api/books?householdId=${household.id}&ownership=owned`)
+      expect(listBooks).toHaveBeenLastCalledWith(expect.objectContaining({ ownership: "owned" }))
     );
   });
 
-  it("calls the API with status when the status filter is changed", async () => {
-    mockApi(() => ({ books: [] }));
+  it("calls listBooks with status and statusUserId when the status filter is changed", async () => {
+    mockRepo(() => []);
     renderLibrary();
-    await waitFor(() => expect(api).toHaveBeenCalledWith(`/api/books?householdId=${household.id}`));
+    await waitFor(() => expect(listBooks).toHaveBeenCalled());
 
     await userEvent.click(screen.getByRole("combobox", { name: "Status" }));
     await userEvent.click(await screen.findByRole("option", { name: "Reading" }));
 
     await waitFor(() =>
-      expect(api).toHaveBeenLastCalledWith(`/api/books?householdId=${household.id}&status=reading`)
+      expect(listBooks).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: "reading", statusUserId: "u1" })
+      )
     );
   });
 
-  it("calls the API with tag when the tag filter is changed, and resets to no param on 'All tags'", async () => {
-    mockApi(() => ({ books: [] }), [{ id: "t1", name: "sci-fi", updated_at: "2026-01-01T00:00:00Z" }]);
+  it("calls listBooks with tag when the tag filter is changed, and resets to no tag on 'All tags'", async () => {
+    mockRepo(() => [], [{ id: "t1", name: "sci-fi", updated_at: "2026-01-01T00:00:00Z" }]);
     renderLibrary();
-    await waitFor(() => expect(api).toHaveBeenCalledWith(`/api/books?householdId=${household.id}`));
+    await waitFor(() => expect(listBooks).toHaveBeenCalled());
 
     await userEvent.click(screen.getByRole("combobox", { name: "Tag" }));
     await userEvent.click(await screen.findByRole("option", { name: "sci-fi" }));
 
     await waitFor(() =>
-      expect(api).toHaveBeenLastCalledWith(`/api/books?householdId=${household.id}&tag=sci-fi`)
+      expect(listBooks).toHaveBeenLastCalledWith(expect.objectContaining({ tag: "sci-fi" }))
     );
 
     await userEvent.click(screen.getByRole("combobox", { name: "Tag" }));
     await userEvent.click(await screen.findByRole("option", { name: "All tags" }));
 
-    await waitFor(() => expect(api).toHaveBeenLastCalledWith(`/api/books?householdId=${household.id}`));
+    await waitFor(() =>
+      expect(listBooks).toHaveBeenLastCalledWith(expect.objectContaining({ tag: undefined }))
+    );
   });
 
   it("shows a Load more button when a full page comes back, and appends the next page on click", async () => {
@@ -145,7 +160,7 @@ describe("Library", () => {
     }));
     const secondPage = [{ ...bookA, id: "b100", edition: { ...bookA.edition, title: "Last Book" } }];
 
-    mockApi((path) => (path.includes("offset=") ? { books: secondPage } : { books: fullPage }));
+    mockRepo((opts) => (opts.offset ? secondPage : fullPage));
     renderLibrary();
 
     expect(await screen.findByText("Book 0")).toBeInTheDocument();
@@ -153,16 +168,14 @@ describe("Library", () => {
 
     await userEvent.click(loadMoreButton);
 
-    await waitFor(() =>
-      expect(api).toHaveBeenCalledWith(`/api/books?householdId=${household.id}&offset=100`)
-    );
+    await waitFor(() => expect(listBooks).toHaveBeenCalledWith(expect.objectContaining({ offset: 100 })));
     expect(await screen.findByText("Last Book")).toBeInTheDocument();
     // The second page was short (1 book, not a full 100), so there's no more to load.
     expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
   });
 
   it("does not show a Load more button when fewer than a full page comes back", async () => {
-    mockApi(() => ({ books: [bookA] }));
+    mockRepo(() => [bookA]);
     renderLibrary();
 
     expect(await screen.findByText("Dune")).toBeInTheDocument();
@@ -170,7 +183,7 @@ describe("Library", () => {
   });
 
   it("shows an empty state with a link to /add when there are no books", async () => {
-    mockApi(() => ({ books: [] }));
+    mockRepo(() => []);
     renderLibrary();
 
     expect(await screen.findByText("No books yet.")).toBeInTheDocument();
@@ -178,13 +191,10 @@ describe("Library", () => {
   });
 
   it("shows a destructive alert when the fetch fails", async () => {
-    // A plain (non-ApiError) failure — e.g. a network TypeError from fetch
-    // itself before any response — renders friendlyError()'s "couldn't
+    // A plain (non-ApiError) failure renders friendlyError()'s "couldn't
     // connect" copy, not the raw error message.
-    vi.mocked(api).mockImplementation(async (path: string) => {
-      if (path.startsWith("/api/tags")) return { tags: [] };
-      throw new TypeError("Network error");
-    });
+    vi.mocked(listTags).mockResolvedValue([]);
+    vi.mocked(listBooks).mockRejectedValue(new TypeError("PGlite error"));
     renderLibrary();
 
     expect(

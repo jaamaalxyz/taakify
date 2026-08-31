@@ -341,4 +341,78 @@ describe("loans", () => {
     const getRes = await app.request("/api/loans?householdId=x");
     expect(getRes.status).toBe(401);
   });
+
+  // --- Client-supplied id + idempotent upsert (fix round) -----------------
+  // repo/loans.ts generates the loan's id (and, when creating a contact
+  // inline via contactName, that contact's id too, sent as `newContactId`)
+  // client-side so the server row converges on the same id(s) instead of
+  // permanently duplicating once Electric syncs it down.
+
+  it("POST with a client-supplied id (and newContactId for an inline contact) creates both under those exact ids", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const book = await addBook(cookie, house.id, "Dune");
+    const loanId = randomUUID();
+    const contactId = randomUUID();
+
+    const res = await createLoan(cookie, {
+      id: loanId,
+      bookId: book.id,
+      contactName: "Client Id Contact",
+      newContactId: contactId,
+      direction: "lent_out",
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.loan.id).toBe(loanId);
+    expect(res.body.loan.contact.id).toBe(contactId);
+    expect(res.body.loan.contact.name).toBe("Client Id Contact");
+  });
+
+  it("POST retried with the same client-supplied id (and newContactId) returns the same rows, not duplicates", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const book = await addBook(cookie, house.id, "Dune");
+    const loanId = randomUUID();
+    const contactId = randomUUID();
+    const body = {
+      id: loanId,
+      bookId: book.id,
+      contactName: "Retried Contact",
+      newContactId: contactId,
+      direction: "lent_out" as const,
+    };
+
+    const first = await createLoan(cookie, body);
+    expect(first.status).toBe(201);
+
+    const retry = await createLoan(cookie, body);
+    expect(retry.status).toBe(201);
+    expect(retry.body.loan.id).toBe(loanId);
+    expect(retry.body.loan.contact.id).toBe(contactId);
+
+    const list = await (
+      await app.request(`/api/loans?householdId=${house.id}`, { headers: { cookie } })
+    ).json();
+    expect(list.loans).toHaveLength(1);
+
+    const contacts = await (
+      await app.request(`/api/contacts?householdId=${house.id}`, { headers: { cookie } })
+    ).json();
+    expect(contacts.contacts.filter((c: any) => c.id === contactId)).toHaveLength(1);
+  });
+
+  it("POST without a client-supplied id (or newContactId) still server-generates them (backward compatible)", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const book = await addBook(cookie, house.id, "Dune");
+
+    const created = await createLoan(cookie, {
+      bookId: book.id,
+      contactName: "No Client Id",
+      direction: "lent_out",
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.loan.id).toBeTruthy();
+    expect(created.body.loan.contact.id).toBeTruthy();
+  });
 });

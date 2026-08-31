@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { randomUUID } from "node:crypto";
 import { withUser } from "../db/tenant.js";
 import { requireUser, type SessionUser } from "../middleware/session.js";
 
@@ -26,6 +27,7 @@ contacts.get("/", async (c) => {
 contacts.post("/", async (c) => {
   const user = c.get("user");
   const body = await c.req.json<{
+    id?: string;
     householdId?: string;
     name?: string;
     phone?: string;
@@ -34,10 +36,14 @@ contacts.post("/", async (c) => {
   if (!body?.householdId || !body?.name) return c.json({ error: "householdId and name required" }, 400);
 
   const result = await withUser(user.id, async (client) => {
+    // Client-supplied id + upsert: see books.ts's POST / for the full
+    // rationale.
     const { rows } = await client.query(
-      `INSERT INTO contact (household_id, name, phone, email, created_by)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id, name, phone, email, linked_user_id, updated_at`,
-      [body.householdId, body.name, body.phone ?? null, body.email ?? null, user.id]
+      `INSERT INTO contact (id, household_id, name, phone, email, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
+       RETURNING id, name, phone, email, linked_user_id, updated_at`,
+      [body.id ?? randomUUID(), body.householdId, body.name, body.phone ?? null, body.email ?? null, user.id]
     );
     return rows[0];
   }).catch((err) => {

@@ -29,7 +29,14 @@ Goals (this plan):
 
 - **Instant local reads.** All book/shelf/loan/tag/contact/reading-status
   reads hit PGlite (IndexedDB-persisted), not the network. The UI feels
-  instant and works fully offline.
+  instant and works fully offline. This includes search: the Books plan
+  (its spec's §2 non-goal table) scoped search to server-side `ILIKE` for
+  that plan's online-only phase — correct at the time — and this plan
+  upgrades it, as promised there. `apps/web/src/lib/repo/books.ts`'s
+  `listBooks` (shipped in Task 6) now runs a case-insensitive `LIKE` (with
+  `\`-escaped metacharacters, matching the server's `ILIKE` semantics)
+  against the local PGlite mirror instead of issuing a network request, so
+  search is instant and works offline like every other read in this plan.
 - **Offline writes via a client outbox.** Mutations write to PGlite
   immediately (UI updates instantly) and enqueue in a persisted outbox that
   retries against the existing Hono API write endpoints. Survives app

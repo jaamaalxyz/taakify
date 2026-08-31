@@ -4,6 +4,7 @@ import { Copy } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
 import { api } from "../lib/api.js";
+import { listBooks } from "../lib/repo/books.js";
 import { friendlyError } from "../lib/error-messages.js";
 import { priorityRank, WISHLIST_PRIORITY_LABELS, type Ownership, type WishlistPriority } from "../lib/labels.js";
 import { Skeleton } from "../components/ui/skeleton.js";
@@ -42,8 +43,8 @@ export function Profile() {
   const [inviteError, setInviteError] = useState("");
 
   useEffect(() => {
-    api<{ books: Book[] }>(`/api/books?householdId=${household.id}`)
-      .then((data) => setBooks(data.books))
+    listBooks({ householdId: household.id })
+      .then((data) => setBooks(data))
       .catch((e) => setLoadError(friendlyError(e)));
   }, [household.id]);
 

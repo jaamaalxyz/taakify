@@ -268,4 +268,111 @@ describe("bookcases + shelves", () => {
     const res2 = await app.request(`/api/shelves/${randomUUID()}`, { method: "DELETE" });
     expect(res2.status).toBe(401);
   });
+
+  // --- Client-supplied id + idempotent upsert (fix round) -----------------
+
+  it("POST /api/bookcases with a client-supplied id creates it under that exact id", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const id = randomUUID();
+
+    const res = await app.request("/api/bookcases", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ id, householdId: house.id, name: "Client Id Case" }),
+    });
+    expect(res.status).toBe(201);
+    expect((await res.json()).bookcase.id).toBe(id);
+  });
+
+  it("POST /api/bookcases retried with the same client-supplied id returns the same row, not a duplicate", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const id = randomUUID();
+    const body = JSON.stringify({ id, householdId: house.id, name: "Retried Case" });
+
+    const first = await app.request("/api/bookcases", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body,
+    });
+    expect(first.status).toBe(201);
+
+    const retry = await app.request("/api/bookcases", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body,
+    });
+    expect(retry.status).toBe(201);
+    expect((await retry.json()).bookcase.id).toBe(id);
+
+    const list = await (
+      await app.request(`/api/bookcases?householdId=${house.id}`, { headers: { cookie } })
+    ).json();
+    expect(list.bookcases).toHaveLength(1);
+  });
+
+  it("POST /:id/shelves with a client-supplied id creates it under that exact id", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const bc = await addBookcase(cookie, house.id);
+    const id = randomUUID();
+
+    const res = await app.request(`/api/bookcases/${bc.body.bookcase.id}/shelves`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ id, label: "Client Id Shelf" }),
+    });
+    expect(res.status).toBe(201);
+    const shelf = (await res.json()).shelf;
+    expect(shelf.id).toBe(id);
+    expect(shelf.position).toBe(1);
+  });
+
+  it("POST /:id/shelves retried with the same client-supplied id returns the same row (no duplicate, no re-bumped position)", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const bc = await addBookcase(cookie, house.id);
+    const id = randomUUID();
+    const body = JSON.stringify({ id, label: "Retried Shelf" });
+
+    const first = await app.request(`/api/bookcases/${bc.body.bookcase.id}/shelves`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body,
+    });
+    expect(first.status).toBe(201);
+    const firstShelf = (await first.json()).shelf;
+    expect(firstShelf.position).toBe(1);
+
+    const retry = await app.request(`/api/bookcases/${bc.body.bookcase.id}/shelves`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body,
+    });
+    expect(retry.status).toBe(201);
+    const retriedShelf = (await retry.json()).shelf;
+    expect(retriedShelf.id).toBe(id);
+    // Position must NOT have been re-bumped to 2 on retry.
+    expect(retriedShelf.position).toBe(1);
+
+    const list = await (
+      await app.request(`/api/bookcases?householdId=${house.id}`, { headers: { cookie } })
+    ).json();
+    expect(list.bookcases[0].shelves).toHaveLength(1);
+  });
+
+  it("POST /api/bookcases and POST /:id/shelves without a client-supplied id still server-generate one", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const bc = await addBookcase(cookie, house.id);
+    expect(bc.body.bookcase.id).toBeTruthy();
+
+    const shelfRes = await app.request(`/api/bookcases/${bc.body.bookcase.id}/shelves`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ label: "No Client Id" }),
+    });
+    expect((await shelfRes.json()).shelf.id).toBeTruthy();
+  });
 });

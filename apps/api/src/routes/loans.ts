@@ -1,7 +1,9 @@
 import { Hono } from "hono";
+import { randomUUID } from "node:crypto";
 import { withUser } from "../db/tenant.js";
 import { requireUser, type SessionUser } from "../middleware/session.js";
 import { dateStr } from "../lib/date.js";
+import { LOAN_DIRECTION_VALUES, type LoanDirection } from "@taakify/shared";
 
 export const loans = new Hono<{ Variables: { user: SessionUser } }>();
 
@@ -65,15 +67,21 @@ function nestLoan(row: any) {
 loans.post("/", async (c) => {
   const user = c.get("user");
   const body = await c.req.json<{
+    id?: string;
     bookId?: string;
     contactId?: string;
     contactName?: string;
-    direction?: "lent_out" | "borrowed_in";
+    // id to assign the contact this request creates inline when
+    // contactName (not contactId) is given — distinct from contactId,
+    // which always means "reference an existing contact." See books.ts's
+    // edition.id for the same "inline-created row" client-id pattern.
+    newContactId?: string;
+    direction?: LoanDirection;
     dueDate?: string;
   }>().catch(() => null);
 
   if (!body?.bookId) return c.json({ error: "bookId is required" }, 400);
-  if (!body.direction || !["lent_out", "borrowed_in"].includes(body.direction)) {
+  if (!body.direction || !LOAN_DIRECTION_VALUES.includes(body.direction)) {
     return c.json({ error: "direction must be 'lent_out' or 'borrowed_in'" }, 400);
   }
   // Exactly one of contactId/contactName is required. If both are supplied,
@@ -99,20 +107,27 @@ loans.post("/", async (c) => {
       );
       if (!contactRows[0] || contactRows[0].household_id !== householdId) return "not_found" as const;
     } else {
+      // Client-supplied id + upsert: see books.ts's POST / for the full
+      // rationale (repo/loans.ts's optimistic local INSERT generates this
+      // contact's id up front, same as its inline-edition counterpart).
       const { rows: newContact } = await client.query(
-        `INSERT INTO contact (household_id, name, created_by)
-         VALUES ($1, $2, $3) RETURNING id`,
-        [householdId, body.contactName, user.id]
+        `INSERT INTO contact (id, household_id, name, created_by)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
+         RETURNING id`,
+        [body.newContactId ?? randomUUID(), householdId, body.contactName, user.id]
       );
       contactId = newContact[0].id;
     }
 
-    const { rows: loanRows } = await client.query(
-      `INSERT INTO loan (household_id, book_id, contact_id, direction, due_date, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-      [householdId, body.bookId, contactId, body.direction, body.dueDate ?? null, user.id]
+    // Same client-supplied-id + upsert pattern for the loan row itself.
+    const loanId = body.id ?? randomUUID();
+    await client.query(
+      `INSERT INTO loan (id, household_id, book_id, contact_id, direction, due_date, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id`,
+      [loanId, householdId, body.bookId, contactId, body.direction, body.dueDate ?? null, user.id]
     );
-    const loanId = loanRows[0].id;
 
     const { rows } = await client.query(NESTED_SELECT + " WHERE l.id = $1 AND l.deleted_at IS NULL", [loanId]);
     return rows[0];

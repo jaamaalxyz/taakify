@@ -2,8 +2,11 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
 import { api } from "../lib/api.js";
+import { listBookcases } from "../lib/repo/shelves.js";
+import { createBook } from "../lib/repo/books.js";
 import { friendlyError } from "../lib/error-messages.js";
 import { type Ownership } from "../lib/labels.js";
+import type { Bookcase } from "@taakify/shared";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.js";
 import { Input } from "../components/ui/input.js";
 import { Label } from "../components/ui/label.js";
@@ -30,13 +33,10 @@ type EditionLookup = {
   cover_url?: string;
 };
 
-type Shelf = { id: string; position: number; label: string; updated_at: string };
-type Bookcase = { id: string; name: string; updated_at: string; shelves: Shelf[] };
-
 const NO_SHELF = "none";
 
 export function Add() {
-  const { household } = useHousehold();
+  const { household, user } = useHousehold();
 
   const [activeTab, setActiveTab] = useState<"isbn" | "manual">("isbn");
   const [revealed, setRevealed] = useState(false);
@@ -64,9 +64,9 @@ export function Add() {
   // form with an error banner.
   useEffect(() => {
     let cancelled = false;
-    api<{ bookcases: Bookcase[] }>(`/api/bookcases?householdId=${household.id}`)
+    listBookcases(household.id)
       .then((data) => {
-        if (!cancelled) setBookcases(data.bookcases);
+        if (!cancelled) setBookcases(data);
       })
       .catch(() => {
         if (!cancelled) setBookcases([]);
@@ -118,20 +118,18 @@ export function Add() {
 
     setSubmitting(true);
     try {
-      await api<{ book: unknown }>("/api/books", {
-        method: "POST",
-        body: JSON.stringify({
-          householdId: household.id,
-          edition: {
-            isbn: isbn.trim() || undefined,
-            title: title.trim(),
-            authors: authors.trim() || undefined,
-            language: language.trim() || undefined,
-            cover_url: coverUrl || undefined,
-          },
-          ownership,
-          shelf_id: shelfId === NO_SHELF ? undefined : shelfId,
-        }),
+      await createBook({
+        householdId: household.id,
+        edition: {
+          isbn: isbn.trim() || undefined,
+          title: title.trim(),
+          authors: authors.trim() || undefined,
+          language: language.trim() || undefined,
+          cover_url: coverUrl || undefined,
+        },
+        ownership,
+        shelf_id: shelfId === NO_SHELF ? undefined : shelfId,
+        createdBy: user.id,
       });
 
       toast(`Added "${title.trim()}"`);

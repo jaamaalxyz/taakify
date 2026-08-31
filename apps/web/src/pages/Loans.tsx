@@ -3,9 +3,13 @@ import { Link } from "react-router-dom";
 import { BookOpen, HandCoins } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
-import { api } from "../lib/api.js";
+import { listLoans, createLoan, updateLoan } from "../lib/repo/loans.js";
+import { listContacts, createContact, updateContact } from "../lib/repo/contacts.js";
+import { listBooks } from "../lib/repo/books.js";
+import { onMirrorChange } from "../lib/sync/shape.js";
 import { friendlyError } from "../lib/error-messages.js";
 import { LOAN_DIRECTION_LABELS, type LoanDirection as Direction } from "../lib/labels.js";
+import type { Loan as SharedLoan, Contact as SharedContact } from "@taakify/shared";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Badge } from "../components/ui/badge.js";
@@ -29,38 +33,8 @@ import {
   DialogTrigger,
 } from "../components/ui/dialog.js";
 
-type LoanBook = {
-  id: string;
-  ownership: string;
-  format: string | null;
-  shelf_id: string | null;
-  do_not_lend: boolean;
-  wishlist_priority: string | null;
-  edition: {
-    id: string;
-    title: string;
-    authors: string;
-    cover_url: string | null;
-    isbn: string | null;
-    language: string | null;
-  };
-};
-
-type Loan = {
-  id: string;
-  household_id: string;
-  direction: Direction;
-  out_date: string | null;
-  due_date: string | null;
-  returned_date: string | null;
-  notes: string | null;
-  updated_at: string;
-  overdue: boolean;
-  book: LoanBook;
-  contact: { id: string; name: string };
-};
-
-type Contact = { id: string; name: string; phone: string | null; email: string | null };
+type Loan = SharedLoan;
+type Contact = SharedContact;
 
 type SimpleBook = { id: string; edition: { title: string; authors: string } };
 
@@ -118,7 +92,7 @@ function LoanRow({
 }
 
 export function Loans() {
-  const { household } = useHousehold();
+  const { household, user } = useHousehold();
 
   const [loans, setLoans] = useState<Loan[] | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -165,16 +139,15 @@ export function Loans() {
   // would. For a household's loan history size this is a non-issue.
   function loadLoans() {
     setLoadError("");
-    const params = new URLSearchParams({ householdId: household.id });
-    api<{ loans: Loan[] }>(`/api/loans?${params.toString()}`)
-      .then((data) => setLoans(data.loans))
+    listLoans({ householdId: household.id })
+      .then((data) => setLoans(data))
       .catch((e) => setLoadError(friendlyError(e)));
   }
 
   function loadContacts() {
     setContactsLoadError("");
-    api<{ contacts: Contact[] }>(`/api/contacts?householdId=${household.id}`)
-      .then((data) => setContacts(data.contacts))
+    listContacts(household.id)
+      .then((data) => setContacts(data))
       .catch((e) => {
         setContacts([]);
         setContactsLoadError(friendlyError(e));
@@ -183,29 +156,34 @@ export function Loans() {
 
   function loadBooks() {
     setBooksLoadError("");
-    api<{ books: SimpleBook[] }>(`/api/books?householdId=${household.id}`)
-      .then((data) => setBooks(data.books))
+    listBooks({ householdId: household.id })
+      .then((data) => setBooks(data))
       .catch((e) => {
         setBooks([]);
         setBooksLoadError(friendlyError(e));
       });
   }
 
+  // Bumped whenever the local mirror changes underneath us (a remote edit
+  // streaming in via Electric, or our own optimistic write) -- re-runs the
+  // loaders below so e.g. another household member recording/returning a
+  // loan shows up without a manual navigate-away-and-back (Important
+  // finding, final whole-branch review).
+  const [mirrorTick, setMirrorTick] = useState(0);
+  useEffect(() => onMirrorChange(() => setMirrorTick((t) => t + 1)), []);
+
   useEffect(() => {
     loadLoans();
     loadContacts();
     loadBooks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [household.id]);
+  }, [household.id, mirrorTick]);
 
   async function handleMarkReturned(loanId: string) {
     setActionError("");
     setReturningId(loanId);
     try {
-      await api(`/api/loans/${loanId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ returned_date: todayStr() }),
-      });
+      await updateLoan(loanId, { returned_date: todayStr() });
       toast("Marked as returned");
       loadLoans();
     } catch (err) {
@@ -236,29 +214,23 @@ export function Loans() {
     setContactError("");
     setSavingContact(true);
     try {
+      const name = contactName.trim();
+      const phone = contactPhone.trim() || null;
+      const email = contactEmail.trim() || null;
       if (editingContactId) {
-        const data = await api<{ contact: Contact }>(`/api/contacts/${editingContactId}`, {
-          method: "PATCH",
-          body: JSON.stringify({
-            name: contactName.trim(),
-            phone: contactPhone.trim() || null,
-            email: contactEmail.trim() || null,
-          }),
-        });
-        setContacts((prev) => prev.map((c) => (c.id === data.contact.id ? data.contact : c)));
-        toast(`Updated contact "${data.contact.name}"`);
+        await updateContact(editingContactId, { name, phone, email });
+        setContacts((prev) => prev.map((c) => (c.id === editingContactId ? { ...c, name, phone, email } : c)));
+        toast(`Updated contact "${name}"`);
       } else {
-        const data = await api<{ contact: Contact }>("/api/contacts", {
-          method: "POST",
-          body: JSON.stringify({
-            householdId: household.id,
-            name: contactName.trim(),
-            phone: contactPhone.trim() || undefined,
-            email: contactEmail.trim() || undefined,
-          }),
+        const id = await createContact({
+          householdId: household.id,
+          name,
+          phone: phone || undefined,
+          email: email || undefined,
+          createdBy: user.id,
         });
-        setContacts((prev) => [...prev, data.contact]);
-        toast(`Added contact "${data.contact.name}"`);
+        setContacts((prev) => [...prev, { id, name, phone, email }]);
+        toast(`Added contact "${name}"`);
       }
       resetContactForm();
       setContactOpen(false);
@@ -282,15 +254,13 @@ export function Loans() {
     setLendError("");
     setSavingLoan(true);
     try {
-      await api("/api/loans", {
-        method: "POST",
-        body: JSON.stringify({
-          bookId: lendBookId,
-          direction: lendDirection,
-          dueDate: lendDueDate || undefined,
-          contactId: lendContactSelection === NEW_CONTACT ? undefined : lendContactSelection,
-          contactName: lendContactSelection === NEW_CONTACT ? lendNewContactName.trim() : undefined,
-        }),
+      await createLoan({
+        bookId: lendBookId,
+        direction: lendDirection,
+        dueDate: lendDueDate || undefined,
+        contactId: lendContactSelection === NEW_CONTACT ? undefined : lendContactSelection,
+        contactName: lendContactSelection === NEW_CONTACT ? lendNewContactName.trim() : undefined,
+        createdBy: user.id,
       });
       toast("Loan recorded");
       setLendOpen(false);

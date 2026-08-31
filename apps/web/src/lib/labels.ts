@@ -1,32 +1,27 @@
-// Shared book-domain enums and their human-readable labels.
+// Human-readable labels for the book-domain enums.
 //
-// These mirror the DB CHECK constraints and the API's VALID_STATUSES
-// (reading-status.ts) / ownership / wishlist_priority values. Centralizing
-// them here keeps the title-casing consistent across screens (a raw
-// `book.ownership` renders "owned"; the label map renders "Owned") and
-// removes the per-screen re-definitions that had started to drift.
-
-export type Ownership = "owned" | "borrowed_in" | "wishlist";
-
-export type LoanDirection = "lent_out" | "borrowed_in";
+// The enums themselves (and their DB-CHECK-constraint-backed values) now
+// live in @taakify/shared, which is the single source of truth per
+// packages/shared/src/types.ts. This module re-exports them for existing
+// call sites and keeps the presentation-only label maps (title-casing,
+// ordering, priority ranking) local to the web app.
+export type {
+  Ownership,
+  LoanDirection,
+  ReadingStatus,
+  WishlistPriority,
+} from "@taakify/shared";
+export { READING_STATUS_ORDER, priorityRank, OWNERSHIP_LABELS } from "@taakify/shared";
+import type {
+  LoanDirection,
+  ReadingStatus,
+  WishlistPriority,
+} from "@taakify/shared";
 
 export const LOAN_DIRECTION_LABELS: Record<LoanDirection, string> = {
   lent_out: "Lent out",
   borrowed_in: "Borrowed in",
 };
-
-export const OWNERSHIP_LABELS: Record<Ownership, string> = {
-  owned: "Owned",
-  borrowed_in: "Borrowed",
-  wishlist: "Wishlist",
-};
-
-export type ReadingStatus =
-  | "unread"
-  | "want_to_read"
-  | "reading"
-  | "finished"
-  | "abandoned";
 
 export const READING_STATUS_LABELS: Record<ReadingStatus, string> = {
   unread: "Unread",
@@ -36,26 +31,8 @@ export const READING_STATUS_LABELS: Record<ReadingStatus, string> = {
   abandoned: "Abandoned",
 };
 
-// Ordered for Select option lists (matches the reading lifecycle progression).
-export const READING_STATUS_ORDER: ReadingStatus[] = [
-  "unread",
-  "want_to_read",
-  "reading",
-  "finished",
-  "abandoned",
-];
-
-export type WishlistPriority = "high" | "medium" | "low";
-
 export const WISHLIST_PRIORITY_LABELS: Record<WishlistPriority, string> = {
   high: "High",
   medium: "Medium",
   low: "Low",
 };
-
-// Lower rank = higher priority. Used by Profile's wishlist sort and any
-// future priority-weighted view. `null` (no priority set) sorts last.
-const PRIORITY_RANK: Record<WishlistPriority, number> = { high: 0, medium: 1, low: 2 };
-export function priorityRank(p: WishlistPriority | null): number {
-  return p ? (PRIORITY_RANK[p] ?? 3) : 3;
-}

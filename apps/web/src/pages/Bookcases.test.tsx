@@ -3,15 +3,21 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { Bookcases } from "./Bookcases.js";
-import { api, ApiError } from "../lib/api.js";
+import { listBookcases, createBookcase, createShelf, updateShelf } from "../lib/repo/shelves.js";
 import { useHousehold } from "../lib/household-context.js";
 import { toast } from "sonner";
 
-vi.mock("../lib/api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/api.js")>();
-  return { ...actual, api: vi.fn() };
-});
+vi.mock("../lib/repo/shelves.js", () => ({
+  listBookcases: vi.fn(),
+  createBookcase: vi.fn(),
+  createShelf: vi.fn(),
+  updateShelf: vi.fn(),
+}));
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
+// See Library.test.tsx's comment on the same mock — Bookcases now
+// subscribes to mirror-change notifications too (Important finding, final
+// whole-branch review).
+vi.mock("../lib/sync/shape.js", () => ({ onMirrorChange: () => () => {} }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
 const household = { id: "h1", name: "Family Library", role: "owner" };
@@ -34,37 +40,18 @@ const twoShelfBookcase = {
   ],
 };
 
-function mockApi({
+function mockRepo({
   bookcases = [bookcase],
-  postBookcase,
-  postShelf,
-  patchShelf,
+  updateShelfImpl,
 }: {
   bookcases?: (typeof bookcase)[];
-  postBookcase?: (body: Record<string, unknown>) => unknown;
-  postShelf?: (path: string, body: Record<string, unknown>) => unknown;
-  patchShelf?: (body: Record<string, unknown>) => unknown;
+  updateShelfImpl?: (id: string, input: Record<string, unknown>) => unknown;
 } = {}) {
-  vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
-    const method = init?.method ?? "GET";
-    if (path.startsWith("/api/bookcases") && method === "GET") return { bookcases };
-    if (path === "/api/bookcases" && method === "POST") {
-      const body = init?.body ? JSON.parse(init.body as string) : {};
-      return postBookcase
-        ? postBookcase(body)
-        : { bookcase: { id: "bc2", name: body.name, updated_at: "2026-01-01T00:00:00Z", shelves: [] } };
-    }
-    if (path.match(/^\/api\/bookcases\/.+\/shelves$/) && method === "POST") {
-      const body = init?.body ? JSON.parse(init.body as string) : {};
-      return postShelf
-        ? postShelf(path, body)
-        : { shelf: { id: "s2", position: 2, label: body.label ?? null, updated_at: "2026-01-01T00:00:00Z" } };
-    }
-    if (path.startsWith("/api/shelves/") && method === "PATCH") {
-      const body = init?.body ? JSON.parse(init.body as string) : {};
-      return patchShelf ? patchShelf(body) : { shelf: { ...bookcase.shelves[0], ...body } };
-    }
-    throw new Error(`unexpected call: ${method} ${path}`);
+  vi.mocked(listBookcases).mockResolvedValue(bookcases);
+  vi.mocked(createBookcase).mockResolvedValue("bc2");
+  vi.mocked(createShelf).mockResolvedValue("s2");
+  vi.mocked(updateShelf).mockImplementation(async (id, input) => {
+    if (updateShelfImpl) updateShelfImpl(id, input as Record<string, unknown>);
   });
 }
 
@@ -77,14 +64,17 @@ function renderBookcases() {
 }
 
 beforeEach(() => {
-  vi.mocked(api).mockReset();
+  vi.mocked(listBookcases).mockReset();
+  vi.mocked(createBookcase).mockReset();
+  vi.mocked(createShelf).mockReset();
+  vi.mocked(updateShelf).mockReset();
   vi.mocked(toast).mockReset();
   vi.mocked(useHousehold).mockReturnValue({ user, household, members: [] });
 });
 
 describe("Bookcases", () => {
   it("renders bookcases with their nested shelves", async () => {
-    mockApi();
+    mockRepo();
     renderBookcases();
 
     expect(await screen.findByText("Living Room")).toBeInTheDocument();
@@ -92,18 +82,16 @@ describe("Bookcases", () => {
   });
 
   it("shows a destructive alert when loading fails", async () => {
-    // An unmapped 500 renders friendlyError()'s generic fallback, not the
-    // raw server message.
-    vi.mocked(api).mockRejectedValue(new ApiError("boom", 500));
+    vi.mocked(listBookcases).mockRejectedValue(new Error("boom"));
     renderBookcases();
 
     expect(
-      await screen.findByText(/Couldn't load bookcases: Something went wrong/)
+      await screen.findByText(/Couldn't load bookcases: Couldn't connect/)
     ).toBeInTheDocument();
   });
 
-  it("creating a bookcase calls POST /api/bookcases", async () => {
-    mockApi();
+  it("creating a bookcase calls createBookcase", async () => {
+    mockRepo();
     renderBookcases();
     await screen.findByText("Living Room");
 
@@ -111,20 +99,12 @@ describe("Bookcases", () => {
     await userEvent.type(await screen.findByLabelText("Name"), "Bedroom");
     await userEvent.click(screen.getByRole("button", { name: "Add" }));
 
-    await waitFor(() =>
-      expect(api).toHaveBeenCalledWith(
-        "/api/bookcases",
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ householdId: "h1", name: "Bedroom" }),
-        })
-      )
-    );
+    await waitFor(() => expect(createBookcase).toHaveBeenCalledWith("h1", "Bedroom", "u1"));
     expect(toast).toHaveBeenCalledWith('Added bookcase "Bedroom"');
   });
 
-  it("adding a shelf calls POST /api/bookcases/:id/shelves", async () => {
-    mockApi();
+  it("adding a shelf calls createShelf", async () => {
+    mockRepo();
     renderBookcases();
     await screen.findByText("Living Room");
 
@@ -132,20 +112,12 @@ describe("Bookcases", () => {
     await userEvent.type(await screen.findByLabelText("Label"), "Bottom Shelf");
     await userEvent.click(screen.getByRole("button", { name: "Add" }));
 
-    await waitFor(() =>
-      expect(api).toHaveBeenCalledWith(
-        "/api/bookcases/bc1/shelves",
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ label: "Bottom Shelf" }),
-        })
-      )
-    );
+    await waitFor(() => expect(createShelf).toHaveBeenCalledWith("bc1", "h1", "Bottom Shelf", "u1"));
     expect(toast).toHaveBeenCalledWith("Shelf added");
   });
 
-  it("editing a shelf label calls PATCH /api/shelves/:id", async () => {
-    mockApi();
+  it("editing a shelf label calls updateShelf", async () => {
+    mockRepo();
     renderBookcases();
     await screen.findByText("Living Room");
 
@@ -155,39 +127,23 @@ describe("Bookcases", () => {
     await userEvent.type(input, "Renamed Shelf");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() =>
-      expect(api).toHaveBeenCalledWith(
-        "/api/shelves/s1",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ label: "Renamed Shelf" }),
-        })
-      )
-    );
+    await waitFor(() => expect(updateShelf).toHaveBeenCalledWith("s1", { label: "Renamed Shelf" }));
     expect(toast).toHaveBeenCalledWith("Shelf updated");
   });
 
-  it("clicking the down arrow on the first shelf swaps positions via two PATCH calls", async () => {
-    mockApi({ bookcases: [twoShelfBookcase] });
+  it("clicking the down arrow on the first shelf swaps positions via two updateShelf calls", async () => {
+    mockRepo({ bookcases: [twoShelfBookcase] });
     renderBookcases();
     await screen.findByText("Living Room");
 
     await userEvent.click(screen.getByRole("button", { name: "Move Top Shelf down" }));
 
-    await waitFor(() =>
-      expect(api).toHaveBeenCalledWith(
-        "/api/shelves/s1",
-        expect.objectContaining({ method: "PATCH", body: JSON.stringify({ position: 2 }) })
-      )
-    );
-    expect(api).toHaveBeenCalledWith(
-      "/api/shelves/s2",
-      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ position: 1 }) })
-    );
+    await waitFor(() => expect(updateShelf).toHaveBeenCalledWith("s1", { position: 2 }));
+    expect(updateShelf).toHaveBeenCalledWith("s2", { position: 1 });
   });
 
   it("disables the up arrow on the first shelf and the down arrow on the last shelf", async () => {
-    mockApi({ bookcases: [twoShelfBookcase] });
+    mockRepo({ bookcases: [twoShelfBookcase] });
     renderBookcases();
     await screen.findByText("Living Room");
 
@@ -198,10 +154,10 @@ describe("Bookcases", () => {
   });
 
   it("shows a friendly error when a swap fails", async () => {
-    mockApi({
+    mockRepo({
       bookcases: [twoShelfBookcase],
-      patchShelf: () => {
-        throw new ApiError("boom", 500);
+      updateShelfImpl: () => {
+        throw new Error("boom");
       },
     });
     renderBookcases();
@@ -209,7 +165,7 @@ describe("Bookcases", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Move Top Shelf down" }));
 
-    expect(await screen.findByText("Something went wrong. Please try again.")).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't connect. Check your connection and try again.")).toBeInTheDocument();
   });
 
   it("blocks a second swap while the first is still in flight", async () => {
@@ -217,24 +173,18 @@ describe("Bookcases", () => {
     const pending = new Promise<void>((resolve) => {
       resolvePatch = resolve;
     });
-    vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
-      const method = init?.method ?? "GET";
-      if (path.startsWith("/api/bookcases") && method === "GET") return { bookcases: [twoShelfBookcase] };
-      if (path.startsWith("/api/shelves/") && method === "PATCH") {
-        await pending;
-        const body = init?.body ? JSON.parse(init.body as string) : {};
-        return { shelf: { ...twoShelfBookcase.shelves[0], ...body } };
-      }
-      throw new Error(`unexpected call: ${method} ${path}`);
+    vi.mocked(listBookcases).mockResolvedValue([twoShelfBookcase]);
+    vi.mocked(updateShelf).mockImplementation(async () => {
+      await pending;
     });
     renderBookcases();
     await screen.findByText("Living Room");
 
     const downButton = screen.getByRole("button", { name: "Move Top Shelf down" });
     await userEvent.click(downButton);
-    // The first swap's PATCHes haven't resolved yet, so every reorder
-    // button (including this one) should now be disabled — a second click
-    // here is a no-op since a disabled native button doesn't fire onClick.
+    // The first swap's writes haven't resolved yet, so every reorder button
+    // (including this one) should now be disabled — a second click here is a
+    // no-op since a disabled native button doesn't fire onClick.
     expect(downButton).toBeDisabled();
     await userEvent.click(downButton);
     await userEvent.click(screen.getByRole("button", { name: "Move Bottom Shelf up" }));
@@ -242,77 +192,56 @@ describe("Bookcases", () => {
     resolvePatch();
     await waitFor(() => expect(downButton).not.toBeDisabled());
 
-    const patchCalls = vi
-      .mocked(api)
-      .mock.calls.filter(([p, i]) => p.startsWith("/api/shelves/") && (i as RequestInit)?.method === "PATCH");
-    expect(patchCalls).toHaveLength(2);
+    expect(vi.mocked(updateShelf).mock.calls).toHaveLength(2);
   });
 
-  it("refetches after a partial swap failure (one PATCH succeeds, one rejects)", async () => {
-    mockApi({
-      bookcases: [twoShelfBookcase],
-      patchShelf: (body) => {
-        if (body.position === 2) throw new ApiError("boom", 500);
-        return { shelf: { ...twoShelfBookcase.shelves[1], ...body } };
-      },
+  it("refetches after a partial swap failure (one write succeeds, one rejects)", async () => {
+    vi.mocked(listBookcases).mockResolvedValue([twoShelfBookcase]);
+    vi.mocked(updateShelf).mockImplementation(async (_id, input) => {
+      if ((input as { position?: number }).position === 2) throw new Error("boom");
     });
     renderBookcases();
     await screen.findByText("Living Room");
 
     await userEvent.click(screen.getByRole("button", { name: "Move Top Shelf down" }));
 
-    expect(await screen.findByText("Something went wrong. Please try again.")).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't connect. Check your connection and try again.")).toBeInTheDocument();
 
-    // One initial GET on mount, plus a second GET refetch after the failed
-    // swap — the UI re-syncs with the server even though the swap errored,
-    // since one of the two PATCHes may have actually succeeded server-side.
+    // One initial load on mount, plus a second refetch after the failed
+    // swap — the UI re-syncs even though the swap errored, since one of the
+    // two writes may have actually succeeded.
     await waitFor(() => {
-      const getCalls = vi
-        .mocked(api)
-        .mock.calls.filter(([p, i]) => p.startsWith("/api/bookcases") && (i as RequestInit | undefined)?.method === undefined);
-      expect(getCalls.length).toBe(2);
+      expect(vi.mocked(listBookcases).mock.calls.length).toBe(2);
     });
   });
 
   it("blocks a second swap while the post-swap refetch is still in flight", async () => {
-    // Both PATCHes resolve immediately, but the refetch GET stays pending
-    // until we release it — this targets the window between "PATCHes
-    // resolved" and "refetch resolved," which is where the in-flight guard
-    // must still be held: releasing it early lets a second click compute a
-    // swap from stale (pre-refetch) local positions and corrupt the order.
+    // Both writes resolve immediately, but the refetch stays pending until
+    // we release it — this targets the window between "writes resolved" and
+    // "refetch resolved," which is where the in-flight guard must still be
+    // held: releasing it early lets a second click compute a swap from stale
+    // (pre-refetch) local positions and corrupt the ordering.
     let resolveGet: () => void = () => {};
     const pendingGet = new Promise<void>((resolve) => {
       resolveGet = resolve;
     });
     let getCallCount = 0;
-    vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
-      const method = init?.method ?? "GET";
-      if (path.startsWith("/api/bookcases") && method === "GET") {
-        getCallCount++;
-        if (getCallCount > 1) await pendingGet;
-        return { bookcases: [twoShelfBookcase] };
-      }
-      if (path.startsWith("/api/shelves/") && method === "PATCH") {
-        const body = init?.body ? JSON.parse(init.body as string) : {};
-        return { shelf: { ...twoShelfBookcase.shelves[0], ...body } };
-      }
-      throw new Error(`unexpected call: ${method} ${path}`);
+    vi.mocked(listBookcases).mockImplementation(async () => {
+      getCallCount++;
+      if (getCallCount > 1) await pendingGet;
+      return [twoShelfBookcase];
     });
+    vi.mocked(updateShelf).mockResolvedValue(undefined);
     renderBookcases();
     await screen.findByText("Living Room");
 
     const downButton = screen.getByRole("button", { name: "Move Top Shelf down" });
     await userEvent.click(downButton);
 
-    // The two swap PATCHes have resolved, but the refetch triggered by the
+    // The two swap writes have resolved, but the refetch triggered by the
     // swap is still pending — the guard must still be held, so the button
     // stays disabled and a click here is a no-op.
-    await waitFor(() => {
-      const patchCalls = vi
-        .mocked(api)
-        .mock.calls.filter(([p, i]) => p.startsWith("/api/shelves/") && (i as RequestInit)?.method === "PATCH");
-      expect(patchCalls).toHaveLength(2);
-    });
+    await waitFor(() => expect(vi.mocked(updateShelf).mock.calls).toHaveLength(2));
     expect(downButton).toBeDisabled();
     await userEvent.click(downButton);
     await userEvent.click(screen.getByRole("button", { name: "Move Bottom Shelf up" }));
@@ -320,9 +249,6 @@ describe("Bookcases", () => {
     resolveGet();
     await waitFor(() => expect(downButton).not.toBeDisabled());
 
-    const patchCalls = vi
-      .mocked(api)
-      .mock.calls.filter(([p, i]) => p.startsWith("/api/shelves/") && (i as RequestInit)?.method === "PATCH");
-    expect(patchCalls).toHaveLength(2);
+    expect(vi.mocked(updateShelf).mock.calls).toHaveLength(2);
   });
 });
