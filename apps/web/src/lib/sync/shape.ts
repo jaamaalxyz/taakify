@@ -265,6 +265,7 @@ function markUpToDate(table: string): void {
       stallTimer = undefined;
     }
     setStalled(false);
+    if (wasSynced === false) startStaleWatchdog();
   }
 }
 
@@ -343,6 +344,120 @@ export function __markUpToDateForTests(table: string): void {
 // hardcoding a number that would silently drift from TENANT_TABLES.
 export function __totalShapeCountForTests(): number {
   return TOTAL_SHAPE_COUNT;
+}
+
+// --- Mid-session outage signal (issue #18) --------------------------------
+//
+// `stalled` above only arms once, inside startSync()'s cold-start timer --
+// it says nothing about Electric going down AFTER the app already reached
+// `synced`. Without this, a mid-session outage (container restart, network
+// path blocked) left reads silently serving a stale mirror and writes
+// queueing/retrying in the outbox with no visible signal anything was
+// wrong (short of the browser itself going offline, a separate state).
+//
+// NOT implemented via the ShapeStream's error callback: @electric-sql/client
+// retries retryable failures (network errors, 5xx) INSIDE its fetch layer
+// with maxRetries: Infinity (see createFetchWithBackoff in the client's
+// source) -- a real Electric outage just backs off and retries forever
+// without ever throwing, so the per-subscription error callback in
+// subscribeTable below essentially never fires for the actual outage
+// scenario this feature targets. And on the rare error that DOES escape
+// (a non-retryable 4xx, a missing-headers error), the client tears the
+// stream down for good with nothing here creating a replacement
+// subscription -- so treating "an error fired" as the recoverable signal
+// would also get permanently stuck once teardown happens.
+//
+// Instead: a freshness watchdog. Every table's shape stream confirms
+// `up-to-date` roughly once per long-poll cycle even when nothing changed
+// (the client's default liveRequestTimeoutMs is 45s) -- so as long as the
+// connection is healthy, `noteTableFresh` fires at least that often for
+// every table. A periodic check flags `stale` once any table hasn't been
+// heard from in STALE_FRESHNESS_TIMEOUT_MS, which naturally covers both the
+// silently-retrying-forever case (no fresh confirmations ever arrive) and
+// the permanently-torn-down case (same thing, forever) without needing to
+// know which one happened. An explicit stream error still flags `stale`
+// immediately too, as a faster (if less commonly reachable) path.
+export const STALE_FRESHNESS_TIMEOUT_MS = 120_000;
+const STALE_CHECK_INTERVAL_MS = 10_000;
+
+const lastFreshAtByTable = new Map<string, number>();
+const erroredTables = new Set<string>();
+let stale = false;
+let staleCheckTimer: ReturnType<typeof setInterval> | undefined;
+const staleListeners = new Set<() => void>();
+
+function setStale(value: boolean): void {
+  if (stale === value) return;
+  stale = value;
+  for (const listener of staleListeners) listener();
+}
+
+export function getSyncStale(): boolean {
+  return stale;
+}
+
+export function onSyncStaleChange(callback: () => void): () => void {
+  staleListeners.add(callback);
+  return () => staleListeners.delete(callback);
+}
+
+function recomputeStale(): void {
+  if (!synced) return;
+  const now = Date.now();
+  const anyTimedOut = [...lastFreshAtByTable.values()].some(
+    (lastFreshAt) => now - lastFreshAt > STALE_FRESHNESS_TIMEOUT_MS
+  );
+  setStale(erroredTables.size > 0 || anyTimedOut);
+}
+
+// Called whenever a table's stream confirms `up-to-date`, whether or not
+// it's the table's first time (unlike markUpToDate, which no-ops after the
+// first) -- this is the "still alive" heartbeat the watchdog above checks.
+function noteTableFresh(table: string): void {
+  lastFreshAtByTable.set(table, Date.now());
+  erroredTables.delete(table);
+  recomputeStale();
+}
+
+function noteTableErrored(table: string): void {
+  if (!synced) return;
+  erroredTables.add(table);
+  recomputeStale();
+}
+
+// Starts the periodic freshness check -- idempotent, called once `synced`
+// first flips true (see markUpToDate below). Deliberately never stopped:
+// this module's subscriptions live for the rest of the page session, same
+// as the ShapeStream instances themselves.
+function startStaleWatchdog(): void {
+  if (staleCheckTimer !== undefined) return;
+  staleCheckTimer = setInterval(recomputeStale, STALE_CHECK_INTERVAL_MS);
+}
+
+// For tests only -- see __resetSyncedForTests's rationale.
+export function __resetSyncStaleForTests(): void {
+  lastFreshAtByTable.clear();
+  erroredTables.clear();
+  stale = false;
+  if (staleCheckTimer !== undefined) {
+    clearInterval(staleCheckTimer);
+    staleCheckTimer = undefined;
+  }
+}
+
+// Drive the internal fresh/errored bookkeeping directly -- for tests only,
+// same rationale as __markUpToDateForTests (no real ShapeStream/timers
+// required to exercise the signal's logic).
+export function __noteTableFreshForTests(table: string): void {
+  noteTableFresh(table);
+}
+
+export function __noteTableErroredForTests(table: string): void {
+  noteTableErrored(table);
+}
+
+export function __recomputeStaleForTests(): void {
+  recomputeStale();
 }
 
 // --- Cold-start bootstrap seed ---------------------------------------------
@@ -472,6 +587,10 @@ function subscribeTable(
       if (isControlMessage(message)) {
         if (message.headers.control === "up-to-date") {
           markUpToDate(table);
+          // Freshness heartbeat for issue #18's stale watchdog: fires on
+          // every up-to-date message, not just the table's first (unlike
+          // markUpToDate, which no-ops after the first).
+          noteTableFresh(table);
         }
         continue;
       }
@@ -483,5 +602,6 @@ function subscribeTable(
   }, (error) => {
     // eslint-disable-next-line no-console
     console.error(`[sync] shape stream error for table "${table}"`, error);
+    noteTableErrored(table);
   });
 }

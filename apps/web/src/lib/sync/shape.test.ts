@@ -18,10 +18,17 @@ import {
   bootstrapInto,
   getSynced,
   onSyncedChange,
+  getSyncStale,
+  onSyncStaleChange,
+  STALE_FRESHNESS_TIMEOUT_MS,
   onMirrorChange,
   __resetSyncedForTests,
   __resetMirrorChangeForTests,
+  __resetSyncStaleForTests,
   __markUpToDateForTests,
+  __noteTableFreshForTests,
+  __noteTableErroredForTests,
+  __recomputeStaleForTests,
   __totalShapeCountForTests,
 } from "./shape.js";
 
@@ -255,6 +262,117 @@ describe("synced signal", () => {
     }
     expect(getSynced()).toBe(true);
     expect(notified).toBe(false);
+  });
+});
+
+// Issue #18: the cold-start `stalled` signal only arms inside startSync()'s
+// one-shot timer, so an Electric outage that happens AFTER the app already
+// reached `synced` had no signal at all -- reads silently served a stale
+// mirror, writes kept queueing/retrying, with nothing telling the user.
+//
+// Deliberately NOT driven by ShapeStream's error callback alone (see
+// shape.ts's comment on this section for why: the client's own fetch-layer
+// retry, maxRetries: Infinity, means a real outage mostly never reaches an
+// error callback at all). These tests exercise the freshness-watchdog path
+// (a table that stops confirming up-to-date, full stop) as the primary
+// mechanism, plus the explicit-error path as a faster secondary signal.
+describe("mid-session stale signal (issue #18)", () => {
+  afterEach(() => {
+    __resetSyncedForTests();
+    __resetSyncStaleForTests();
+    vi.useRealTimers();
+  });
+
+  it("stays false for a table error that happens before the cold start ever synced (already covered by `stalled`)", () => {
+    __resetSyncedForTests();
+    __resetSyncStaleForTests();
+    expect(getSynced()).toBe(false);
+
+    __noteTableErroredForTests("book");
+
+    expect(getSyncStale()).toBe(false);
+  });
+
+  it("flips true on a table error AFTER the initial synced flip, and notifies", () => {
+    for (let i = 0; i < __totalShapeCountForTests(); i++) {
+      __markUpToDateForTests(`table-${i}`);
+      __noteTableFreshForTests(`table-${i}`);
+    }
+    expect(getSynced()).toBe(true);
+
+    let notifications = 0;
+    const unsubscribe = onSyncStaleChange(() => notifications++);
+
+    __noteTableErroredForTests("book");
+
+    expect(getSyncStale()).toBe(true);
+    expect(notifications).toBe(1);
+    unsubscribe();
+  });
+
+  it("clears once the errored table freshens again (reaches up-to-date again)", () => {
+    for (let i = 0; i < __totalShapeCountForTests(); i++) {
+      __markUpToDateForTests(`table-${i}`);
+      __noteTableFreshForTests(`table-${i}`);
+    }
+    __noteTableErroredForTests("book");
+    expect(getSyncStale()).toBe(true);
+
+    __noteTableFreshForTests("book");
+
+    expect(getSyncStale()).toBe(false);
+  });
+
+  it("stays true while any one of several errored tables hasn't freshened yet", () => {
+    for (let i = 0; i < __totalShapeCountForTests(); i++) {
+      __markUpToDateForTests(`table-${i}`);
+      __noteTableFreshForTests(`table-${i}`);
+    }
+    __noteTableErroredForTests("book");
+    __noteTableErroredForTests("loan");
+    expect(getSyncStale()).toBe(true);
+
+    __noteTableFreshForTests("book");
+    expect(getSyncStale()).toBe(true); // "loan" still errored
+
+    __noteTableFreshForTests("loan");
+    expect(getSyncStale()).toBe(false);
+  });
+
+  it("flips true once a table has gone quiet for longer than STALE_FRESHNESS_TIMEOUT_MS, with no error ever having fired", () => {
+    vi.useFakeTimers();
+    for (let i = 0; i < __totalShapeCountForTests(); i++) {
+      __markUpToDateForTests(`table-${i}`);
+      __noteTableFreshForTests(`table-${i}`);
+    }
+    expect(getSyncStale()).toBe(false);
+
+    vi.advanceTimersByTime(STALE_FRESHNESS_TIMEOUT_MS + 1);
+    __recomputeStaleForTests();
+
+    expect(getSyncStale()).toBe(true);
+  });
+
+  it("clears the timeout-based stale flag once the quiet table freshens again", () => {
+    vi.useFakeTimers();
+    for (let i = 0; i < __totalShapeCountForTests(); i++) {
+      __markUpToDateForTests(`table-${i}`);
+      __noteTableFreshForTests(`table-${i}`);
+    }
+    vi.advanceTimersByTime(STALE_FRESHNESS_TIMEOUT_MS + 1);
+    __recomputeStaleForTests();
+    expect(getSyncStale()).toBe(true);
+
+    __noteTableFreshForTests("table-0");
+    // Every table was frozen at the same tick above, so freshening only
+    // one of them isn't enough -- freshen them all, matching what actually
+    // happens once the shape stream catches back up (every subscription
+    // gets a fresh up-to-date once reconnected).
+    for (let i = 1; i < __totalShapeCountForTests(); i++) {
+      __noteTableFreshForTests(`table-${i}`);
+    }
+
+    expect(getSyncStale()).toBe(false);
   });
 });
 
