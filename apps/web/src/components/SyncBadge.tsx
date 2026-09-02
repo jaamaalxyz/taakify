@@ -23,7 +23,7 @@ function rowLabel(row: OutboxRow): string {
 // toast). Offline and Saving are both transient/self-explanatory the moment
 // connectivity changes, so ordering them below "dead" costs nothing.
 export function SyncBadge() {
-  const { online, pending, dead, stalled } = useSyncStatus();
+  const { online, pending, dead, stalled, stale } = useSyncStatus();
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<OutboxRow[]>([]);
 
@@ -106,6 +106,17 @@ export function SyncBadge() {
   // connection never actually came up.
   if (stalled) {
     return <Badge variant="destructive">Sync unavailable</Badge>;
+  }
+
+  // Issue #18: mid-session equivalent of `stalled` -- a table's shape
+  // stream has gone quiet (or errored) after the app already reached
+  // `synced` and hasn't freshened up again (see shape.ts's freshness
+  // watchdog: noteTableFresh/noteTableErrored/recomputeStale). Ranked above
+  // "Saving…" for the same reason `stalled` is: the outbox keeps
+  // queueing/retrying writes while this is true, so "just saving" is
+  // misleadingly reassuring.
+  if (stale) {
+    return <Badge variant="destructive">Not syncing</Badge>;
   }
 
   if (pending > 0) {

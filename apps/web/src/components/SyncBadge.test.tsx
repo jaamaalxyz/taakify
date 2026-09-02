@@ -6,7 +6,7 @@ import { SyncBadge } from "./SyncBadge.js";
 // { online, pending, dead } combination without a real outbox/PGlite
 // round-trip -- that combination is exactly what SyncBadge's variant logic
 // switches on.
-const status = vi.hoisted(() => ({ online: true, pending: 0, dead: 0, stalled: false }));
+const status = vi.hoisted(() => ({ online: true, pending: 0, dead: 0, stalled: false, stale: false }));
 
 vi.mock("../lib/sync/use-sync-status.js", () => ({
   useSyncStatus: () => ({ ...status }),
@@ -33,6 +33,7 @@ beforeEach(() => {
   status.pending = 0;
   status.dead = 0;
   status.stalled = false;
+  status.stale = false;
   outbox.listDeadLettered.mockReset().mockResolvedValue([]);
   outbox.retry.mockReset().mockResolvedValue(undefined);
   outbox.dismiss.mockReset().mockResolvedValue(undefined);
@@ -72,6 +73,29 @@ describe("SyncBadge states", () => {
     render(<SyncBadge />);
     expect(screen.getByText("Offline")).toBeInTheDocument();
     expect(screen.queryByText("Sync unavailable")).not.toBeInTheDocument();
+  });
+
+  it("renders a destructive 'Not syncing' badge when stale and online (issue #18)", () => {
+    status.stale = true;
+    render(<SyncBadge />);
+    const badge = screen.getByText("Not syncing");
+    expect(badge).toHaveAttribute("data-variant", "destructive");
+  });
+
+  it("prefers 'Offline' over 'Not syncing' when both are true", () => {
+    status.stale = true;
+    status.online = false;
+    render(<SyncBadge />);
+    expect(screen.getByText("Offline")).toBeInTheDocument();
+    expect(screen.queryByText("Not syncing")).not.toBeInTheDocument();
+  });
+
+  it("prefers 'Not syncing' over 'Saving…' when both are true", () => {
+    status.stale = true;
+    status.pending = 3;
+    render(<SyncBadge />);
+    expect(screen.getByText("Not syncing")).toBeInTheDocument();
+    expect(screen.queryByText("Saving…")).not.toBeInTheDocument();
   });
 
   it("renders a destructive 'Sync issue' badge when dead > 0, taking precedence over offline/saving", () => {
