@@ -129,6 +129,24 @@ export async function updateShelf(shelfId: string, input: UpdateShelfInput): Pro
   });
 }
 
+/**
+ * Reassign every shelf in `shelfIds` to its 1-based index as its new
+ * position, in the given (final) order -- issue #13. Mirrors
+ * `POST /api/bookcases/:id/reorder`'s atomic UPDATE loop: all positions are
+ * written as one optimistic transaction alongside a single outbox row (like
+ * createLoan's multi-statement enqueue), rather than the old approach of two
+ * separate PATCH /api/shelves/:id calls with a partial-failure window
+ * between them.
+ */
+export async function reorderShelves(bookcaseId: string, shelfIds: string[]): Promise<void> {
+  await ready;
+  const statements = shelfIds.map((shelfId, index) => ({
+    sql: `UPDATE shelf SET position = $2, updated_at = $3 WHERE id = $1 AND deleted_at IS NULL`,
+    params: [shelfId, index + 1, OPTIMISTIC_UPDATED_AT],
+  }));
+  await enqueue(`/api/bookcases/${bookcaseId}/reorder`, "POST", { shelfIds }, statements);
+}
+
 export async function deleteShelf(shelfId: string): Promise<void> {
   await ready;
   await enqueue(`/api/shelves/${shelfId}`, "DELETE", undefined, {

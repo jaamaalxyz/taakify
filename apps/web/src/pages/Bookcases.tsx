@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Library as LibraryIcon, ArrowUp, ArrowDown } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
-import { listBookcases, createBookcase, createShelf, updateShelf } from "../lib/repo/shelves.js";
+import { listBookcases, createBookcase, createShelf, updateShelf, reorderShelves } from "../lib/repo/shelves.js";
 import { onMirrorChange } from "../lib/sync/shape.js";
 import type { Bookcase, Shelf } from "@taakify/shared";
 import { friendlyError } from "../lib/error-messages.js";
@@ -124,32 +124,26 @@ export function Bookcases() {
     }
   }
 
-  async function handleSwapShelves(a: Shelf, b: Shelf) {
+  // Issue #13: a single atomic POST /:id/reorder replaces the old two-
+  // parallel-PATCH swap (partial-failure window between the two requests,
+  // and no defense against two household members reordering the same
+  // bookcase concurrently — no unique constraint on (bookcase_id,
+  // position)). The full desired order is computed from the bookcase's
+  // current shelf list with `a` and `b` swapped, then sent as one request
+  // the server applies inside one locked transaction.
+  async function handleSwapShelves(bookcaseId: string, shelves: Shelf[], a: Shelf, b: Shelf) {
     setReorderError("");
     setReorderingShelfId(a.id);
     try {
-      await Promise.all([
-        updateShelf(a.id, { position: b.position }),
-        updateShelf(b.id, { position: a.position }),
-      ]);
+      const shelfIds = shelves.map((s) => s.id);
+      const ai = shelfIds.indexOf(a.id);
+      const bi = shelfIds.indexOf(b.id);
+      [shelfIds[ai], shelfIds[bi]] = [shelfIds[bi], shelfIds[ai]];
+      await reorderShelves(bookcaseId, shelfIds);
+      loadBookcases();
     } catch (err) {
       setReorderError(friendlyError(err));
     } finally {
-      // One of the two PATCHes may have succeeded even though the overall
-      // swap failed (e.g. a network blip between the two requests) — the
-      // server can be left holding a mismatched position that this
-      // component's stale local state wouldn't reflect. Refetch here too,
-      // not just on success, so the UI always converges on whatever the
-      // server actually ended up with; the error above still tells the
-      // user something went wrong even once the list looks right again.
-      //
-      // Await the refetch before releasing the in-flight guard: swap
-      // positions are computed from local state, so if the guard cleared
-      // before the fresh positions landed, a fast second click could
-      // compute a swap from stale (pre-refetch) positions and corrupt the
-      // ordering server-side (no unique constraint on (bookcase_id,
-      // position) catches this).
-      await loadBookcases();
       setReorderingShelfId(null);
     }
   }
@@ -252,7 +246,7 @@ export function Bookcases() {
                             size="icon-xs"
                             aria-label={`Move ${shelf.label || `Shelf ${shelf.position}`} up`}
                             disabled={!shelfAbove || swapping}
-                            onClick={() => shelfAbove && handleSwapShelves(shelf, shelfAbove)}
+                            onClick={() => shelfAbove && handleSwapShelves(bc.id, bc.shelves, shelf, shelfAbove)}
                           >
                             <ArrowUp />
                           </Button>
@@ -261,7 +255,7 @@ export function Bookcases() {
                             size="icon-xs"
                             aria-label={`Move ${shelf.label || `Shelf ${shelf.position}`} down`}
                             disabled={!shelfBelow || swapping}
-                            onClick={() => shelfBelow && handleSwapShelves(shelf, shelfBelow)}
+                            onClick={() => shelfBelow && handleSwapShelves(bc.id, bc.shelves, shelf, shelfBelow)}
                           >
                             <ArrowDown />
                           </Button>
