@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { Bookcases } from "./Bookcases.js";
-import { listBookcases, createBookcase, createShelf, updateShelf } from "../lib/repo/shelves.js";
+import { listBookcases, createBookcase, createShelf, updateShelf, reorderShelves } from "../lib/repo/shelves.js";
 import { useHousehold } from "../lib/household-context.js";
 import { toast } from "sonner";
 
@@ -12,6 +12,7 @@ vi.mock("../lib/repo/shelves.js", () => ({
   createBookcase: vi.fn(),
   createShelf: vi.fn(),
   updateShelf: vi.fn(),
+  reorderShelves: vi.fn(),
 }));
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
 // See Library.test.tsx's comment on the same mock — Bookcases now
@@ -42,16 +43,17 @@ const twoShelfBookcase = {
 
 function mockRepo({
   bookcases = [bookcase],
-  updateShelfImpl,
+  reorderShelvesImpl,
 }: {
   bookcases?: (typeof bookcase)[];
-  updateShelfImpl?: (id: string, input: Record<string, unknown>) => unknown;
+  reorderShelvesImpl?: (bookcaseId: string, shelfIds: string[]) => unknown;
 } = {}) {
   vi.mocked(listBookcases).mockResolvedValue(bookcases);
   vi.mocked(createBookcase).mockResolvedValue("bc2");
   vi.mocked(createShelf).mockResolvedValue("s2");
-  vi.mocked(updateShelf).mockImplementation(async (id, input) => {
-    if (updateShelfImpl) updateShelfImpl(id, input as Record<string, unknown>);
+  vi.mocked(updateShelf).mockResolvedValue(undefined);
+  vi.mocked(reorderShelves).mockImplementation(async (bookcaseId, shelfIds) => {
+    if (reorderShelvesImpl) reorderShelvesImpl(bookcaseId, shelfIds);
   });
 }
 
@@ -68,6 +70,7 @@ beforeEach(() => {
   vi.mocked(createBookcase).mockReset();
   vi.mocked(createShelf).mockReset();
   vi.mocked(updateShelf).mockReset();
+  vi.mocked(reorderShelves).mockReset();
   vi.mocked(toast).mockReset();
   vi.mocked(useHousehold).mockReturnValue({ user, household, members: [] });
 });
@@ -131,15 +134,36 @@ describe("Bookcases", () => {
     expect(toast).toHaveBeenCalledWith("Shelf updated");
   });
 
-  it("clicking the down arrow on the first shelf swaps positions via two updateShelf calls", async () => {
+  it("clicking the down arrow on the first shelf calls reorderShelves with the swapped order (issue #13)", async () => {
     mockRepo({ bookcases: [twoShelfBookcase] });
     renderBookcases();
     await screen.findByText("Living Room");
 
     await userEvent.click(screen.getByRole("button", { name: "Move Top Shelf down" }));
 
-    await waitFor(() => expect(updateShelf).toHaveBeenCalledWith("s1", { position: 2 }));
-    expect(updateShelf).toHaveBeenCalledWith("s2", { position: 1 });
+    await waitFor(() => expect(reorderShelves).toHaveBeenCalledWith("bc1", ["s2", "s1"]));
+  });
+
+  it("clicking the up arrow on the second shelf calls reorderShelves with the swapped order", async () => {
+    mockRepo({ bookcases: [twoShelfBookcase] });
+    renderBookcases();
+    await screen.findByText("Living Room");
+
+    await userEvent.click(screen.getByRole("button", { name: "Move Bottom Shelf up" }));
+
+    await waitFor(() => expect(reorderShelves).toHaveBeenCalledWith("bc1", ["s2", "s1"]));
+  });
+
+  it("refetches after a successful reorder", async () => {
+    mockRepo({ bookcases: [twoShelfBookcase] });
+    renderBookcases();
+    await screen.findByText("Living Room");
+
+    await userEvent.click(screen.getByRole("button", { name: "Move Top Shelf down" }));
+
+    await waitFor(() => expect(reorderShelves).toHaveBeenCalled());
+    // One initial load on mount, plus a refetch after the reorder.
+    await waitFor(() => expect(vi.mocked(listBookcases).mock.calls.length).toBe(2));
   });
 
   it("disables the up arrow on the first shelf and the down arrow on the last shelf", async () => {
@@ -153,10 +177,10 @@ describe("Bookcases", () => {
     expect(screen.getByRole("button", { name: "Move Bottom Shelf up" })).toBeEnabled();
   });
 
-  it("shows a friendly error when a swap fails", async () => {
+  it("shows a friendly error when a reorder fails", async () => {
     mockRepo({
       bookcases: [twoShelfBookcase],
-      updateShelfImpl: () => {
+      reorderShelvesImpl: () => {
         throw new Error("boom");
       },
     });
@@ -168,13 +192,13 @@ describe("Bookcases", () => {
     expect(await screen.findByText("Couldn't connect. Check your connection and try again.")).toBeInTheDocument();
   });
 
-  it("blocks a second swap while the first is still in flight", async () => {
-    let resolvePatch: () => void = () => {};
+  it("blocks a second reorder while the first is still in flight", async () => {
+    let resolveReorder: () => void = () => {};
     const pending = new Promise<void>((resolve) => {
-      resolvePatch = resolve;
+      resolveReorder = resolve;
     });
     vi.mocked(listBookcases).mockResolvedValue([twoShelfBookcase]);
-    vi.mocked(updateShelf).mockImplementation(async () => {
+    vi.mocked(reorderShelves).mockImplementation(async () => {
       await pending;
     });
     renderBookcases();
@@ -182,73 +206,16 @@ describe("Bookcases", () => {
 
     const downButton = screen.getByRole("button", { name: "Move Top Shelf down" });
     await userEvent.click(downButton);
-    // The first swap's writes haven't resolved yet, so every reorder button
+    // The first reorder hasn't resolved yet, so every reorder button
     // (including this one) should now be disabled — a second click here is a
     // no-op since a disabled native button doesn't fire onClick.
     expect(downButton).toBeDisabled();
     await userEvent.click(downButton);
     await userEvent.click(screen.getByRole("button", { name: "Move Bottom Shelf up" }));
 
-    resolvePatch();
+    resolveReorder();
     await waitFor(() => expect(downButton).not.toBeDisabled());
 
-    expect(vi.mocked(updateShelf).mock.calls).toHaveLength(2);
-  });
-
-  it("refetches after a partial swap failure (one write succeeds, one rejects)", async () => {
-    vi.mocked(listBookcases).mockResolvedValue([twoShelfBookcase]);
-    vi.mocked(updateShelf).mockImplementation(async (_id, input) => {
-      if ((input as { position?: number }).position === 2) throw new Error("boom");
-    });
-    renderBookcases();
-    await screen.findByText("Living Room");
-
-    await userEvent.click(screen.getByRole("button", { name: "Move Top Shelf down" }));
-
-    expect(await screen.findByText("Couldn't connect. Check your connection and try again.")).toBeInTheDocument();
-
-    // One initial load on mount, plus a second refetch after the failed
-    // swap — the UI re-syncs even though the swap errored, since one of the
-    // two writes may have actually succeeded.
-    await waitFor(() => {
-      expect(vi.mocked(listBookcases).mock.calls.length).toBe(2);
-    });
-  });
-
-  it("blocks a second swap while the post-swap refetch is still in flight", async () => {
-    // Both writes resolve immediately, but the refetch stays pending until
-    // we release it — this targets the window between "writes resolved" and
-    // "refetch resolved," which is where the in-flight guard must still be
-    // held: releasing it early lets a second click compute a swap from stale
-    // (pre-refetch) local positions and corrupt the ordering.
-    let resolveGet: () => void = () => {};
-    const pendingGet = new Promise<void>((resolve) => {
-      resolveGet = resolve;
-    });
-    let getCallCount = 0;
-    vi.mocked(listBookcases).mockImplementation(async () => {
-      getCallCount++;
-      if (getCallCount > 1) await pendingGet;
-      return [twoShelfBookcase];
-    });
-    vi.mocked(updateShelf).mockResolvedValue(undefined);
-    renderBookcases();
-    await screen.findByText("Living Room");
-
-    const downButton = screen.getByRole("button", { name: "Move Top Shelf down" });
-    await userEvent.click(downButton);
-
-    // The two swap writes have resolved, but the refetch triggered by the
-    // swap is still pending — the guard must still be held, so the button
-    // stays disabled and a click here is a no-op.
-    await waitFor(() => expect(vi.mocked(updateShelf).mock.calls).toHaveLength(2));
-    expect(downButton).toBeDisabled();
-    await userEvent.click(downButton);
-    await userEvent.click(screen.getByRole("button", { name: "Move Bottom Shelf up" }));
-
-    resolveGet();
-    await waitFor(() => expect(downButton).not.toBeDisabled());
-
-    expect(vi.mocked(updateShelf).mock.calls).toHaveLength(2);
+    expect(vi.mocked(reorderShelves).mock.calls).toHaveLength(1);
   });
 });

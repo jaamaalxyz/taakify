@@ -362,6 +362,123 @@ describe("bookcases + shelves", () => {
     expect(list.bookcases[0].shelves).toHaveLength(1);
   });
 
+  // --- POST /:id/reorder (issue #13: atomic shelf reorder) ---------------
+
+  async function addShelf(cookie: string, bookcaseId: string, label: string) {
+    const res = await app.request(`/api/bookcases/${bookcaseId}/shelves`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ label }),
+    });
+    return (await res.json()).shelf as { id: string; position: number; label: string };
+  }
+
+  it("reorders shelves atomically, returning them in the new order", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const bc = await addBookcase(cookie, house.id);
+    const a = await addShelf(cookie, bc.body.bookcase.id, "Fiction");
+    const b = await addShelf(cookie, bc.body.bookcase.id, "Nonfiction");
+    const c = await addShelf(cookie, bc.body.bookcase.id, "Reference");
+
+    const res = await app.request(`/api/bookcases/${bc.body.bookcase.id}/reorder`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ shelfIds: [c.id, a.id, b.id] }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.shelves.map((s: any) => s.id)).toEqual([c.id, a.id, b.id]);
+    expect(body.shelves.map((s: any) => s.position)).toEqual([1, 2, 3]);
+
+    const list = await (
+      await app.request(`/api/bookcases?householdId=${house.id}`, { headers: { cookie } })
+    ).json();
+    expect(list.bookcases[0].shelves.map((s: any) => s.id)).toEqual([c.id, a.id, b.id]);
+  });
+
+  it("returns 400 when shelfIds omits a shelf that belongs to the bookcase", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const bc = await addBookcase(cookie, house.id);
+    const a = await addShelf(cookie, bc.body.bookcase.id, "Fiction");
+    await addShelf(cookie, bc.body.bookcase.id, "Nonfiction");
+
+    const res = await app.request(`/api/bookcases/${bc.body.bookcase.id}/reorder`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ shelfIds: [a.id] }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when shelfIds includes a shelf id from a different bookcase", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const bc1 = await addBookcase(cookie, house.id, "Case 1");
+    const bc2 = await addBookcase(cookie, house.id, "Case 2");
+    const a = await addShelf(cookie, bc1.body.bookcase.id, "Fiction");
+    const foreign = await addShelf(cookie, bc2.body.bookcase.id, "Other Case Shelf");
+
+    const res = await app.request(`/api/bookcases/${bc1.body.bookcase.id}/reorder`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ shelfIds: [a.id, foreign.id] }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when shelfIds contains a duplicate id", async () => {
+    const { cookie } = await signUp(app);
+    const house = await createHousehold(cookie);
+    const bc = await addBookcase(cookie, house.id);
+    const a = await addShelf(cookie, bc.body.bookcase.id, "Fiction");
+    const b = await addShelf(cookie, bc.body.bookcase.id, "Nonfiction");
+
+    const res = await app.request(`/api/bookcases/${bc.body.bookcase.id}/reorder`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ shelfIds: [a.id, a.id] }),
+    });
+    expect(res.status).toBe(400);
+    void b;
+  });
+
+  it("returns 404 for a nonexistent bookcase", async () => {
+    const { cookie } = await signUp(app);
+    const res = await app.request(`/api/bookcases/${randomUUID()}/reorder`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ shelfIds: [] }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("RLS: returns 404 (not the reordered result) when the bookcase belongs to another household", async () => {
+    const a = await signUp(app);
+    const houseA = await createHousehold(a.cookie, "A");
+    const bcA = await addBookcase(a.cookie, houseA.id, "A's case");
+    const shelfA = await addShelf(a.cookie, bcA.body.bookcase.id, "A's shelf");
+
+    const b = await signUp(app);
+    await createHousehold(b.cookie, "B");
+    const res = await app.request(`/api/bookcases/${bcA.body.bookcase.id}/reorder`, {
+      method: "POST",
+      headers: { cookie: b.cookie, "content-type": "application/json" },
+      body: JSON.stringify({ shelfIds: [shelfA.id] }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("requires auth", async () => {
+    const res = await app.request(`/api/bookcases/${randomUUID()}/reorder`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ shelfIds: [] }),
+    });
+    expect(res.status).toBe(401);
+  });
+
   it("POST /api/bookcases and POST /:id/shelves without a client-supplied id still server-generate one", async () => {
     const { cookie } = await signUp(app);
     const house = await createHousehold(cookie);

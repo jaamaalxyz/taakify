@@ -131,6 +131,72 @@ bookcases.post("/:id/shelves", async (c) => {
   return c.json({ shelf: result }, 201);
 });
 
+// POST /api/bookcases/:id/reorder — body { shelfIds: string[] }, the
+// bookcase's shelves in the desired final order. Issue #13: replaces the
+// two-parallel-PATCH swap the frontend used to do (see Bookcases.tsx) with
+// a single atomic operation, closing both hazards that approach had: a
+// partial-failure window between the two PATCHes, and no defense against
+// two household members reordering the same bookcase concurrently (no
+// unique constraint on (bookcase_id, position)).
+bookcases.post("/:id/reorder", async (c) => {
+  const user = c.get("user");
+  const bookcaseId = c.req.param("id");
+  const body = await c.req.json<{ shelfIds?: unknown }>().catch(() => ({}) as { shelfIds?: unknown });
+  if (!Array.isArray(body.shelfIds) || !body.shelfIds.every((id) => typeof id === "string")) {
+    return c.json({ error: "shelfIds must be an array of shelf ids" }, 400);
+  }
+  const shelfIds = body.shelfIds as string[];
+  if (new Set(shelfIds).size !== shelfIds.length) {
+    return c.json({ error: "shelfIds contains a duplicate id" }, 400);
+  }
+
+  const result = await withUser(user.id, async (client) => {
+    // Lock the bookcase first (same pattern as the shelf-creation POST
+    // above) so two concurrent reorders of the same bookcase serialize
+    // instead of racing.
+    const { rows: bcRows } = await client.query(
+      "SELECT id FROM bookcase WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+      [bookcaseId]
+    );
+    if (!bcRows[0]) return "not_found" as const;
+
+    const { rows: liveShelves } = await client.query(
+      "SELECT id FROM shelf WHERE bookcase_id = $1 AND deleted_at IS NULL",
+      [bookcaseId]
+    );
+    const liveIds = new Set(liveShelves.map((r) => r.id as string));
+    // shelfIds must be exactly the bookcase's live shelves, no more, no
+    // fewer -- a partial list would leave the missing shelves' positions
+    // stale, and a foreign id would let a caller move another bookcase's
+    // (possibly another household's) shelf into this one's position space.
+    const isExactMatch = shelfIds.length === liveIds.size && shelfIds.every((id) => liveIds.has(id));
+    if (!isExactMatch) return "invalid_shelf_ids" as const;
+
+    for (let i = 0; i < shelfIds.length; i++) {
+      await client.query("UPDATE shelf SET position = $2, updated_at = now() WHERE id = $1", [
+        shelfIds[i],
+        i + 1,
+      ]);
+    }
+
+    const { rows } = await client.query(
+      "SELECT id, position, label, updated_at FROM shelf WHERE bookcase_id = $1 AND deleted_at IS NULL ORDER BY position",
+      [bookcaseId]
+    );
+    return rows;
+  }).catch((err) => {
+    if ((err as { code?: string }).code === "42501") return "forbidden" as const;
+    throw err;
+  });
+
+  if (result === "not_found") return c.json({ error: "not found" }, 404);
+  if (result === "forbidden") return c.json({ error: "forbidden" }, 403);
+  if (result === "invalid_shelf_ids") {
+    return c.json({ error: "shelfIds must be exactly the bookcase's current shelves" }, 400);
+  }
+  return c.json({ shelves: result });
+});
+
 // PATCH /api/shelves/:id — edit label/position.
 shelves.patch("/:id", async (c) => {
   const user = c.get("user");
