@@ -25,7 +25,9 @@ const MIRROR_TABLES = [
 ];
 
 describe("mirror-schema.sql", () => {
-  it("creates every mirror table without error", async () => {
+  // First exec pays the full wasm compile; well over the 5s default under
+  // parallel-suite load, so give it headroom (subsequent tests reuse it).
+  it("creates every mirror table without error", { timeout: 30_000 }, async () => {
     await expect(db.exec(mirrorSchema)).resolves.toBeDefined();
   });
 

@@ -9,7 +9,7 @@
 // dependency, so it can be unit tested directly (see shape.test.ts) and
 // consumed either from a React effect (see AppShell.tsx) or, later, from a
 // service worker / background sync context.
-import type { PGlite } from "@electric-sql/pglite";
+import type { PGliteInterface } from "@electric-sql/pglite";
 import { ShapeStream, isChangeMessage, isControlMessage, type Row } from "@electric-sql/client";
 import { db, ready } from "../db/pglite.js";
 
@@ -57,12 +57,13 @@ type Operation = "insert" | "update" | "delete";
  *
  * Exported standalone (not just used internally) so unit tests can drive it
  * with synthetic messages, no real ShapeStream/network required. Takes the
- * PGlite instance explicitly (rather than reaching for the module-level
- * singleton) so tests can pass an in-memory `new PGlite()` instead of the
- * real `idb://`-backed mirror.
+ * database explicitly (rather than reaching for the module-level singleton)
+ * so tests can pass an in-memory `new PGlite()` instead of the real
+ * `idb://`-backed (now PGliteWorker-fronted, issue #17) mirror -- typed as
+ * `PGliteInterface` rather than the concrete `PGlite` class so either works.
  */
 export async function applyChangeTo(
-  database: PGlite,
+  database: PGliteInterface,
   table: TenantTable | "edition",
   operation: Operation,
   value: Row
@@ -494,7 +495,7 @@ const BOOTSTRAP_COLLECTIONS: Record<string, TenantTable | "edition"> = {
  * mocked. Throws on any failure (network, non-2xx, bad JSON); `bootstrap`
  * below is the version real callers use, which swallows those.
  */
-export async function bootstrapInto(database: PGlite, householdId: string): Promise<void> {
+export async function bootstrapInto(database: PGliteInterface, householdId: string): Promise<void> {
   const res = await fetch(`/api/bootstrap?householdId=${householdId}`, {
     credentials: "include",
   });

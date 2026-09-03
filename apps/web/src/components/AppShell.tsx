@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { Library, Plus, HandCoins, User, LogOut } from "lucide-react";
-import { toast } from "sonner";
 import { authClient } from "../lib/auth.js";
 import { HouseholdProvider, useHousehold } from "../lib/household-context.js";
-import { db, IDB_DATABASE_NAME, ready } from "../lib/db/pglite.js";
-import { getMultiTabDetected, onMultiTabChange, startMultiTabGuard } from "../lib/db/multi-tab-guard.js";
+import { db, closeLocalDatabase, IDB_DATABASE_NAME, ready } from "../lib/db/pglite.js";
+import {
+  requestOtherTabsToClose,
+  announceSignOutComplete,
+  startSignOutCoordination,
+} from "../lib/db/signout-coordination.js";
 import {
   bootstrap,
   getSynced,
@@ -89,18 +92,26 @@ function deleteIndexedDb(name: string): Promise<void> {
 
 // Sign-out sequence shared by every path that actually proceeds (empty
 // outbox / dead-only outbox / confirmed-despite-pending-writes): flush
-// best-effort, close the PGlite connection, delete its IndexedDB database
-// (so a shared device never leaks the previous household's local mirror --
-// see IDB_DATABASE_NAME's comment for why the literal dataDir string
-// wouldn't work here), sign out, then reload to a clean slate. Order
+// best-effort, coordinate every OTHER open tab into closing (and
+// terminating) its database worker, close this tab's client and worker,
+// delete the shared IndexedDB database (so a shared device never leaks the
+// previous household's local mirror -- see IDB_DATABASE_NAME's comment for
+// why the literal dataDir string wouldn't work here), tell the other tabs
+// it's safe to reload, sign out, then reload to a clean slate. Order
 // matters: data must be cleared before the session is dropped, and nothing
 // here runs unless the caller has already decided sign-out should proceed.
 async function performSignOut(): Promise<void> {
   if (navigator.onLine) {
     await Promise.race([flush(), new Promise<void>((resolve) => setTimeout(resolve, SIGN_OUT_FLUSH_TIMEOUT_MS))]);
   }
-  await db.close();
+  // Cross-tab phase 1 (issue #17): with PGliteWorker, `db.close()` below
+  // only closes THIS tab's proxy -- any other open tab's worker still holds
+  // the IndexedDB connection and blocks the delete (or worse, wins the
+  // vacated leader election and re-opens it). Ask them to close first.
+  await requestOtherTabsToClose();
+  await closeLocalDatabase();
   await deleteIndexedDb(IDB_DATABASE_NAME);
+  announceSignOutComplete();
   await authClient.signOut().finally(() => location.reload());
 }
 
@@ -304,30 +315,21 @@ function SyncGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-// Important 5 (final whole-branch review): pglite.ts opens PGlite directly
-// against an idb://-backed dataDir, which @electric-sql/pglite documents as
-// unsupported for concurrent multi-tab access without a full PGliteWorker
-// migration (see multi-tab-guard.ts's header comment for why that full fix
-// is out of scope for this round). This effect starts the lightweight
-// BroadcastChannel handshake once per page load and surfaces a one-time
-// warning toast the moment another tab is detected -- runs at the AppShell
-// level (not inside SyncGate) so it fires regardless of which household is
-// active, and only once regardless of how many times AppShell re-renders
-// (`getMultiTabDetected()` is checked before ever toasting).
-function useMultiTabWarning(): void {
+// Follower side of cross-tab sign-out coordination (issue #17): when
+// another tab signs out, THIS tab's database worker is holding the shared
+// IndexedDB open and would block (or re-open, via leader election) the
+// delete that sign-out is about to perform. The listener closes our worker
+// on request, then reloads once the signing-out tab confirms the delete
+// finished (see signout-coordination.ts for the full protocol). Runs at the
+// AppShell level so it's active regardless of which household page is open.
+function useSignOutCoordination(): void {
   useEffect(() => {
-    startMultiTabGuard();
-    if (getMultiTabDetected()) {
-      toast.warning("Taakify is open in another tab — using two tabs at once may cause sync issues.");
-    }
-    return onMultiTabChange(() => {
-      toast.warning("Taakify is open in another tab — using two tabs at once may cause sync issues.");
-    });
+    startSignOutCoordination(closeLocalDatabase);
   }, []);
 }
 
 export function AppShell() {
-  useMultiTabWarning();
+  useSignOutCoordination();
   return (
     <HouseholdProvider>
       <SyncGate>

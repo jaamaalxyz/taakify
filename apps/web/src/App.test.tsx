@@ -21,7 +21,13 @@ vi.mock("./lib/api.js", () => ({ api: vi.fn() }));
 // (`idb://` IndexedDB storage, browser-only). Mock it the same way
 // shape.test.ts does, purely to avoid an unhandled IndexedDB-open rejection
 // during import; no test here exercises repo reads/writes directly.
-vi.mock("./lib/db/pglite.js", () => ({ db: undefined, ready: Promise.resolve() }));
+vi.mock("./lib/db/pglite.js", () => ({
+  db: undefined,
+  ready: Promise.resolve(),
+  // AppShell's sign-out coordination (issue #17) passes this through; not
+  // exercised here, but the factory must define every imported export.
+  closeLocalDatabase: vi.fn().mockResolvedValue(undefined),
+}));
 
 // The Library route (rendered by several tests below) reads via
 // repo/books.js and repo/tags.js, not api() — mock them so those tests get
