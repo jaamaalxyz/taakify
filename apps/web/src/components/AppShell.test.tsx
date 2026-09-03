@@ -4,7 +4,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AppShell, signOutWarningMessage } from "./AppShell.js";
 import { api } from "../lib/api.js";
 import { authClient } from "../lib/auth.js";
-import { db } from "../lib/db/pglite.js";
+import { db, closeLocalDatabase } from "../lib/db/pglite.js";
 import { flush, startOutboxWorker } from "../lib/sync/outbox.js";
 import { startSync, bootstrap } from "../lib/sync/shape.js";
 
@@ -29,6 +29,18 @@ vi.mock("../lib/db/pglite.js", () => ({
   },
   ready: Promise.resolve(),
   IDB_DATABASE_NAME: "/pglite/taakify",
+  closeLocalDatabase: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Sign-out's cross-tab coordination (issue #17) has a real 1s settle window
+// inside requestOtherTabsToClose, which would push every sign-out test past
+// waitFor's default budget for no test-value. The protocol itself is unit
+// tested in signout-coordination.test.ts against a real BroadcastChannel;
+// here it just needs to get out of the way.
+vi.mock("../lib/db/signout-coordination.js", () => ({
+  requestOtherTabsToClose: vi.fn().mockResolvedValue(undefined),
+  announceSignOutComplete: vi.fn(),
+  startSignOutCoordination: vi.fn(),
 }));
 
 vi.mock("../lib/sync/outbox.js", () => ({
@@ -112,6 +124,7 @@ beforeEach(() => {
   });
   vi.mocked(authClient.signOut).mockClear();
   vi.mocked(db.close).mockClear();
+  vi.mocked(closeLocalDatabase).mockClear();
   vi.mocked(flush).mockClear();
   // performSignOut (Important 2 fix) now wraps indexedDB.deleteDatabase in
   // a Promise and awaits its onsuccess -- the mock needs to actually fire
@@ -226,7 +239,7 @@ describe("AppShell sign-out gating (Task 7)", () => {
 
     await waitFor(() => expect(authClient.signOut).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument();
-    expect(db.close).toHaveBeenCalledTimes(1);
+    expect(closeLocalDatabase).toHaveBeenCalledTimes(1);
     expect(indexedDB.deleteDatabase).toHaveBeenCalledWith("/pglite/taakify");
   });
 
@@ -291,7 +304,7 @@ describe("AppShell sign-out gating (Task 7)", () => {
 
     await waitFor(() => expect(authClient.signOut).toHaveBeenCalledTimes(1));
     expect(flush).toHaveBeenCalled();
-    expect(db.close).toHaveBeenCalledTimes(1);
+    expect(closeLocalDatabase).toHaveBeenCalledTimes(1);
     expect(indexedDB.deleteDatabase).toHaveBeenCalledWith("/pglite/taakify");
   });
 

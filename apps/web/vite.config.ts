@@ -25,4 +25,14 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ["@electric-sql/pglite"],
   },
+  // pglite-worker.ts (issue #17's PGliteWorker migration) is bundled as a
+  // Vite `?worker` entry. Vite's default worker output format is IIFE,
+  // which Rollup refuses for a build that needs code-splitting -- and this
+  // one does, since the worker dynamically pulls in PGlite's own WASM/data
+  // sidecar loading code the same way the main bundle does. `format: "es"`
+  // (an ES module worker) is what PGlite's own Vite integration guidance
+  // calls for.
+  worker: {
+    format: "es",
+  },
 });

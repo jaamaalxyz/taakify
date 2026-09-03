@@ -2,6 +2,14 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { SyncBadge } from "./SyncBadge.js";
 
+// outbox.js is imported "actual" below (for describeOperation/parseBody's
+// real implementations), which transitively imports the real db/pglite.js
+// singleton -- since issue #17, that singleton eagerly constructs a real
+// `new Worker(...)` at module load, which jsdom doesn't provide. Stub it
+// out the same way shape.test.ts does; nothing this file exercises through
+// the "actual" outbox import touches `db` itself.
+vi.mock("../lib/db/pglite.js", () => ({ db: undefined, ready: Promise.resolve() }));
+
 // use-sync-status.js is mocked so each rendering test can drive an exact
 // { online, pending, dead } combination without a real outbox/PGlite
 // round-trip -- that combination is exactly what SyncBadge's variant logic
