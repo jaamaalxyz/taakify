@@ -42,7 +42,6 @@ const EXCLUSIVE_SHELF_TO_STATUS: Record<string, ReadingStatus> = {
 // non-empty column in the export is preserved in `notes` instead of being
 // dropped (spec §8).
 const MAPPED_HEADERS = new Set([
-  "Book Id",
   "Title",
   "Author",
   "ISBN",
@@ -50,7 +49,6 @@ const MAPPED_HEADERS = new Set([
   "My Rating",
   "Date Read",
   "Exclusive Shelf",
-  "Bookshelves",
 ]);
 
 // Goodreads wraps ISBN/ISBN13 as ="0141439563" so spreadsheet software
