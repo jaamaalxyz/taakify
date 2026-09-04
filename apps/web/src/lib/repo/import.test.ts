@@ -13,7 +13,7 @@ vi.mock("../db/pglite.js", async () => {
 });
 
 import { db, ready } from "../db/pglite.js";
-import { importGoodreadsCsv } from "./import.js";
+import { importGoodreadsCsv, previewGoodreadsCsv } from "./import.js";
 
 const HOUSEHOLD = "00000000-0000-0000-0000-00000000000a";
 const USER = "user-1";
@@ -48,7 +48,7 @@ describe("importGoodreadsCsv", () => {
       { householdId: HOUSEHOLD, userId: USER }
     );
 
-    expect(result).toEqual({ totalRows: 2, imported: 2, failures: [] });
+    expect(result).toEqual({ totalRows: 2, imported: 2, failures: [], cancelled: false });
 
     const { rows: books } = await db.query<{ ownership: string; title: string; isbn: string | null }>(
       `SELECT b.ownership, e.title, e.isbn FROM book b JOIN edition e ON e.id = b.edition_id
@@ -56,7 +56,7 @@ describe("importGoodreadsCsv", () => {
       [HOUSEHOLD]
     );
     expect(books).toEqual([
-      { ownership: "owned", title: "1984", isbn: null },
+      { ownership: "wishlist", title: "1984", isbn: null },
       { ownership: "owned", title: "Dune", isbn: "9780441172719" },
     ]);
 
@@ -97,5 +97,94 @@ describe("importGoodreadsCsv", () => {
       [1, 2],
       [2, 2],
     ]);
+  });
+});
+
+describe("duplicate protection", () => {
+  it("skips rows whose book already exists in the household (by ISBN or title+author)", async () => {
+    // First import creates both books.
+    const first = await importGoodreadsCsv(
+      csv('Dune,Frank Herbert,,="9780441172719",5,,read', '1984,George Orwell,,,0,,to-read'),
+      { householdId: HOUSEHOLD, userId: USER }
+    );
+    expect(first.imported).toBe(2);
+
+    // Re-importing the same CSV imports nothing; both rows are skipped.
+    const second = await importGoodreadsCsv(
+      csv('Dune,Frank Herbert,,="9780441172719",5,,read', '1984,George Orwell,,,0,,to-read'),
+      { householdId: HOUSEHOLD, userId: USER }
+    );
+    expect(second.imported).toBe(0);
+    expect(second.failures).toEqual([
+      { rowNumber: 2, title: "Dune", message: "Already in your library — skipped" },
+      { rowNumber: 3, title: "1984", message: "Already in your library — skipped" },
+    ]);
+
+    const { rows: books } = await db.query("SELECT id FROM book WHERE household_id = $1", [HOUSEHOLD]);
+    expect(books).toHaveLength(2);
+  });
+
+  it("skips a duplicate row within the same file", async () => {
+    const result = await importGoodreadsCsv(
+      csv('Dune,Frank Herbert,,,0,,to-read', 'Dune,Frank Herbert,,,0,,to-read'),
+      { householdId: HOUSEHOLD, userId: USER }
+    );
+    expect(result.imported).toBe(1);
+    expect(result.failures).toEqual([
+      { rowNumber: 3, title: "Dune", message: "Already in your library — skipped" },
+    ]);
+  });
+
+  it("matches title+author case-insensitively when the export has no ISBN", async () => {
+    await importGoodreadsCsv(csv('Dune,Frank Herbert,,,0,,to-read'), { householdId: HOUSEHOLD, userId: USER });
+    const result = await importGoodreadsCsv(csv('dune,frank herbert,,,0,,read'), {
+      householdId: HOUSEHOLD,
+      userId: USER,
+    });
+    expect(result.imported).toBe(0);
+    expect(result.failures).toHaveLength(1);
+  });
+});
+
+describe("cancellation", () => {
+  it("stops importing when shouldCancel returns true and reports cancelled", async () => {
+    let calls = 0;
+    const result = await importGoodreadsCsv(
+      csv('Dune,Frank Herbert,,,0,,to-read', '1984,George Orwell,,,0,,to-read', 'Emma,Jane Austen,,,0,,to-read'),
+      {
+        householdId: HOUSEHOLD,
+        userId: USER,
+        // Cancel after the first row has been checked.
+        shouldCancel: () => calls++ > 0,
+      }
+    );
+    expect(result.cancelled).toBe(true);
+    expect(result.imported).toBe(1);
+
+    const { rows: books } = await db.query("SELECT id FROM book WHERE household_id = $1", [HOUSEHOLD]);
+    expect(books).toHaveLength(1);
+  });
+});
+
+describe("previewGoodreadsCsv", () => {
+  it("reports counts without writing anything", async () => {
+    const preview = previewGoodreadsCsv(csv('Dune,Frank Herbert,,,0,,to-read', ',No Title,,,0,,to-read'));
+    expect(preview).toEqual({ fileError: null, bookCount: 1, errorCount: 1 });
+
+    const { rows: books } = await db.query("SELECT id FROM book WHERE household_id = $1", [HOUSEHOLD]);
+    expect(books).toHaveLength(0);
+  });
+
+  it("surfaces file-level errors", () => {
+    expect(previewGoodreadsCsv("Name,Creator\nDune,Frank Herbert\n")).toEqual({
+      fileError: "not_goodreads",
+      bookCount: 0,
+      errorCount: 0,
+    });
+    expect(previewGoodreadsCsv("Title,Author\n")).toEqual({
+      fileError: "no_books",
+      bookCount: 0,
+      errorCount: 0,
+    });
   });
 });

@@ -108,3 +108,38 @@ describe("mapGoodreadsCsv", () => {
     expect(result.books[0]).toMatchObject({ title: "百年孤独", authors: "Gabriel García Márquez" });
   });
 });
+
+describe("mapGoodreadsCsv file validation", () => {
+  it("reports not_goodreads when the headers have no Title column", () => {
+    const result = mapGoodreadsCsv("Name,Creator\nDune,Frank Herbert\n");
+    expect(result).toEqual({ books: [], errors: [], fileError: "not_goodreads" });
+  });
+
+  it("reports not_goodreads for empty input", () => {
+    expect(mapGoodreadsCsv("")).toEqual({ books: [], errors: [], fileError: "not_goodreads" });
+  });
+
+  it("reports no_books for a valid header-only export", () => {
+    const result = mapGoodreadsCsv("Title,Author\n");
+    expect(result).toEqual({ books: [], errors: [], fileError: "no_books" });
+  });
+
+  it("leaves fileError null when at least one row maps or errors", () => {
+    const result = mapGoodreadsCsv(csv("1984,George Orwell,,,0,,,,,to-read,,"));
+    expect(result.fileError).toBeNull();
+  });
+});
+
+describe("ownership mapping", () => {
+  it("imports to-read (wishlist) rows as wishlist ownership, not owned", () => {
+    const result = mapGoodreadsCsv(csv(",1984,George Orwell,,,0,,,,,to-read,,"));
+    expect(result.books[0]).toMatchObject({ status: "want_to_read", ownership: "wishlist" });
+  });
+
+  it("imports read and currently-reading rows as owned", () => {
+    const read = mapGoodreadsCsv(csv(",Dune,Frank Herbert,,,0,,,,,read,,"));
+    const cr = mapGoodreadsCsv(csv(",Emma,Jane Austen,,,0,,,,,currently-reading,,"));
+    expect(read.books[0].ownership).toBe("owned");
+    expect(cr.books[0].ownership).toBe("owned");
+  });
+});

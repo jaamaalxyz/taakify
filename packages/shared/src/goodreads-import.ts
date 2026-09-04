@@ -24,9 +24,15 @@ export interface GoodreadsImportError {
   message: string;
 }
 
+// Whole-file problems surfaced before any row is mapped, so the UI can show
+// one clear message ("this isn't a Goodreads export") instead of a wall of
+// per-row "missing Title" errors.
+export type GoodreadsFileError = "not_goodreads" | "no_books";
+
 export interface GoodreadsImportResult {
   books: MappedGoodreadsBook[];
   errors: GoodreadsImportError[];
+  fileError: GoodreadsFileError | null;
 }
 
 // Goodreads' three standard exclusive shelves. A custom exclusive shelf
@@ -37,6 +43,10 @@ const EXCLUSIVE_SHELF_TO_STATUS: Record<string, ReadingStatus> = {
   "currently-reading": "reading",
   "to-read": "want_to_read",
 };
+
+// A "to-read" shelf is a wishlist -- those books usually aren't on the
+// shelf at home -- so they import as wishlist ownership rather than owned.
+const WISHLIST_SHELVES = new Set(["to-read"]);
 
 // Columns folded directly into a MappedGoodreadsBook field. Every other
 // non-empty column in the export is preserved in `notes` instead of being
@@ -91,6 +101,7 @@ function mapGoodreadsRow(
 
   const shelf = fieldValue(headers, row, "Exclusive Shelf").trim();
   const status = EXCLUSIVE_SHELF_TO_STATUS[shelf] ?? "unread";
+  const ownership: Ownership = WISHLIST_SHELVES.has(shelf) ? "wishlist" : "owned";
 
   const finishedAt = status === "finished" ? parseDateRead(fieldValue(headers, row, "Date Read")) : null;
 
@@ -110,7 +121,7 @@ function mapGoodreadsRow(
     title,
     authors,
     isbn,
-    ownership: "owned",
+    ownership,
     status,
     rating,
     finished_at: finishedAt,
@@ -120,6 +131,14 @@ function mapGoodreadsRow(
 
 export function mapGoodreadsCsv(text: string): GoodreadsImportResult {
   const { headers, rows } = parseCsv(text);
+
+  // A real Goodreads export always has a Title column. Without it, mapping
+  // every row would just produce N "missing Title" errors -- better to say
+  // up front that the file isn't what we asked for.
+  if (!headers.includes("Title")) {
+    return { books: [], errors: [], fileError: "not_goodreads" };
+  }
+
   const books: MappedGoodreadsBook[] = [];
   const errors: GoodreadsImportError[] = [];
 
@@ -135,5 +154,9 @@ export function mapGoodreadsCsv(text: string): GoodreadsImportResult {
     }
   });
 
-  return { books, errors };
+  if (books.length === 0 && errors.length === 0) {
+    return { books, errors, fileError: "no_books" };
+  }
+
+  return { books, errors, fileError: null };
 }
