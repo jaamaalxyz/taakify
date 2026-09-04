@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
@@ -24,6 +24,14 @@ import {
   SelectValue,
 } from "../components/ui/select.js";
 
+// Lazy so the ZXing decoder (and its native-BarcodeDetector-first component)
+// only loads once someone actually taps "Scan barcode" — most visits to this
+// screen never open the scanner, and ZXing is sizable enough to keep out of
+// the page's initial bundle.
+const BarcodeScanner = lazy(() =>
+  import("../components/BarcodeScanner.js").then((m) => ({ default: m.BarcodeScanner }))
+);
+
 type EditionLookup = {
   isbn: string;
   title: string;
@@ -43,6 +51,7 @@ export function Add() {
   const [revealed, setRevealed] = useState(false);
   const [lookupNotice, setLookupNotice] = useState("");
   const [lookingUp, setLookingUp] = useState(false);
+  const [scanning, setScanning] = useState(false);
 
   const [title, setTitle] = useState("");
   const [authors, setAuthors] = useState("");
@@ -80,8 +89,10 @@ export function Add() {
   // Explicit "Look up" click rather than auto-lookup on blur/Enter: ISBNs are
   // often pasted or scanned in fragments, and auto-firing on every blur would
   // mean redundant/partial lookups. A single explicit trigger is predictable.
-  async function handleLookup() {
-    const value = isbn.trim();
+  // Takes the value as a param so a barcode scan can feed the same flow with
+  // the code it just decoded (state hasn't updated yet at call time).
+  async function handleLookup(rawValue?: string) {
+    const value = (rawValue ?? isbn).trim();
     if (!value) return;
     setLookingUp(true);
     setSubmitError("");
@@ -107,6 +118,12 @@ export function Add() {
       setLookingUp(false);
       setRevealed(true);
     }
+  }
+
+  function handleScan(code: string) {
+    setScanning(false);
+    setIsbn(code);
+    void handleLookup(code);
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -241,11 +258,25 @@ export function Add() {
                   onChange={(e) => setIsbn(e.target.value)}
                   placeholder="978..."
                 />
-                <Button type="button" onClick={handleLookup} disabled={lookingUp || !isbn.trim()}>
+                <Button type="button" onClick={() => handleLookup()} disabled={lookingUp || !isbn.trim()}>
                   {lookingUp ? "Looking up…" : "Look up"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setScanning((s) => !s)}
+                  disabled={lookingUp}
+                >
+                  {scanning ? "Hide scanner" : "Scan barcode"}
                 </Button>
               </div>
             </div>
+
+            {scanning && (
+              <Suspense fallback={<p className="text-sm text-muted-foreground">Loading scanner…</p>}>
+                <BarcodeScanner onDetected={handleScan} onClose={() => setScanning(false)} />
+              </Suspense>
+            )}
 
             {lookupNotice && <p className="text-sm text-muted-foreground">{lookupNotice}</p>}
 
