@@ -6,6 +6,7 @@ import { api } from "../lib/api.js";
 import { listBookcases } from "../lib/repo/shelves.js";
 import { createBook } from "../lib/repo/books.js";
 import { friendlyError } from "../lib/error-messages.js";
+import { BarcodeScanner } from "../components/BarcodeScanner.js";
 import { type Ownership } from "../lib/labels.js";
 import type { Bookcase } from "@taakify/shared";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.js";
@@ -43,6 +44,7 @@ export function Add() {
   const [revealed, setRevealed] = useState(false);
   const [lookupNotice, setLookupNotice] = useState("");
   const [lookingUp, setLookingUp] = useState(false);
+  const [scanning, setScanning] = useState(false);
 
   const [title, setTitle] = useState("");
   const [authors, setAuthors] = useState("");
@@ -80,8 +82,10 @@ export function Add() {
   // Explicit "Look up" click rather than auto-lookup on blur/Enter: ISBNs are
   // often pasted or scanned in fragments, and auto-firing on every blur would
   // mean redundant/partial lookups. A single explicit trigger is predictable.
-  async function handleLookup() {
-    const value = isbn.trim();
+  // Takes the value as a param so a barcode scan can feed the same flow with
+  // the code it just decoded (state hasn't updated yet at call time).
+  async function handleLookup(rawValue?: string) {
+    const value = (rawValue ?? isbn).trim();
     if (!value) return;
     setLookingUp(true);
     setSubmitError("");
@@ -107,6 +111,12 @@ export function Add() {
       setLookingUp(false);
       setRevealed(true);
     }
+  }
+
+  function handleScan(code: string) {
+    setScanning(false);
+    setIsbn(code);
+    void handleLookup(code);
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -241,11 +251,23 @@ export function Add() {
                   onChange={(e) => setIsbn(e.target.value)}
                   placeholder="978..."
                 />
-                <Button type="button" onClick={handleLookup} disabled={lookingUp || !isbn.trim()}>
+                <Button type="button" onClick={() => handleLookup()} disabled={lookingUp || !isbn.trim()}>
                   {lookingUp ? "Looking up…" : "Look up"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setScanning((s) => !s)}
+                  disabled={lookingUp}
+                >
+                  {scanning ? "Hide scanner" : "Scan barcode"}
                 </Button>
               </div>
             </div>
+
+            {scanning && (
+              <BarcodeScanner onDetected={handleScan} onClose={() => setScanning(false)} />
+            )}
 
             {lookupNotice && <p className="text-sm text-muted-foreground">{lookupNotice}</p>}
 

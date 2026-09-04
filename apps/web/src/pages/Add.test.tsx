@@ -20,6 +20,16 @@ vi.mock("../lib/repo/shelves.js", () => ({ listBookcases: vi.fn() }));
 vi.mock("../lib/repo/books.js", () => ({ createBook: vi.fn() }));
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
+// Stand-in for the camera scanner: clicking the button "decodes" a fixed
+// ISBN, so the Add-level test exercises what a real scan drives (ISBN
+// filled + lookup fired + scanner closed) without any camera machinery.
+vi.mock("../components/BarcodeScanner.js", () => ({
+  BarcodeScanner: ({ onDetected }: { onDetected: (code: string) => void }) => (
+    <button type="button" onClick={() => onDetected("9780000000001")}>
+      Simulate scan
+    </button>
+  ),
+}));
 
 // Radix Select needs these DOM APIs, which jsdom doesn't implement, to open
 // its popover and register clicks on options.
@@ -100,6 +110,29 @@ describe("Add", () => {
     );
     expect(await screen.findByLabelText("Title")).toHaveValue("Dune");
     expect(screen.getByLabelText("Authors")).toHaveValue("Frank Herbert");
+  });
+
+  it("scanning a barcode fills the ISBN, runs the lookup, and closes the scanner", async () => {
+    mockDeps({
+      lookup: () => ({
+        isbn: "9780000000001",
+        title: "Dune",
+        authors: "Frank Herbert",
+      }),
+    });
+    renderAdd();
+
+    await userEvent.click(screen.getByRole("button", { name: "Scan barcode" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Simulate scan" }));
+
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("/api/editions/lookup?isbn=9780000000001")
+    );
+    expect(await screen.findByLabelText("Title")).toHaveValue("Dune");
+    expect(screen.getByLabelText("ISBN", { selector: "#add-isbn-lookup" })).toHaveValue(
+      "9780000000001"
+    );
+    expect(screen.queryByRole("button", { name: "Simulate scan" })).not.toBeInTheDocument();
   });
 
   it("reveals an empty manual form with a no-match notice on a lookup miss", async () => {
