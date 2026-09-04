@@ -30,6 +30,16 @@ export function BarcodeScanner({ onDetected, onClose }: BarcodeScannerProps) {
   const detectedRef = useRef(false);
   const [error, setError] = useState("");
 
+  // The parent (Add.tsx) passes an inline callback that's a new reference on
+  // every render. Reading it through a ref -- rather than depending on it
+  // directly -- keeps the camera-start effect below running exactly once per
+  // mount instead of tearing down and restarting the stream (and re-prompting
+  // for permission) on every unrelated re-render of the parent.
+  const onDetectedRef = useRef(onDetected);
+  useEffect(() => {
+    onDetectedRef.current = onDetected;
+  }, [onDetected]);
+
   useEffect(() => {
     detectedRef.current = false;
     const video = videoRef.current;
@@ -43,7 +53,8 @@ export function BarcodeScanner({ onDetected, onClose }: BarcodeScannerProps) {
       if (detectedRef.current || !looksLikeIsbn(code)) return;
       detectedRef.current = true;
       controls?.stop();
-      onDetected(code);
+      stream?.getTracks().forEach((t) => t.stop());
+      onDetectedRef.current(code);
     }
 
     const start = async () => {
@@ -99,7 +110,7 @@ export function BarcodeScanner({ onDetected, onClose }: BarcodeScannerProps) {
       controls?.stop();
       stream?.getTracks().forEach((t) => t.stop());
     };
-  }, [onDetected]);
+  }, []);
 
   return (
     <div className="space-y-2">

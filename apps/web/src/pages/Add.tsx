@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
@@ -6,7 +6,6 @@ import { api } from "../lib/api.js";
 import { listBookcases } from "../lib/repo/shelves.js";
 import { createBook } from "../lib/repo/books.js";
 import { friendlyError } from "../lib/error-messages.js";
-import { BarcodeScanner } from "../components/BarcodeScanner.js";
 import { type Ownership } from "../lib/labels.js";
 import type { Bookcase } from "@taakify/shared";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.js";
@@ -24,6 +23,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select.js";
+
+// Lazy so the ZXing decoder (and its native-BarcodeDetector-first component)
+// only loads once someone actually taps "Scan barcode" — most visits to this
+// screen never open the scanner, and ZXing is sizable enough to keep out of
+// the page's initial bundle.
+const BarcodeScanner = lazy(() =>
+  import("../components/BarcodeScanner.js").then((m) => ({ default: m.BarcodeScanner }))
+);
 
 type EditionLookup = {
   isbn: string;
@@ -266,7 +273,9 @@ export function Add() {
             </div>
 
             {scanning && (
-              <BarcodeScanner onDetected={handleScan} onClose={() => setScanning(false)} />
+              <Suspense fallback={<p className="text-sm text-muted-foreground">Loading scanner…</p>}>
+                <BarcodeScanner onDetected={handleScan} onClose={() => setScanning(false)} />
+              </Suspense>
             )}
 
             {lookupNotice && <p className="text-sm text-muted-foreground">{lookupNotice}</p>}
