@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
 import { api } from "../lib/api.js";
@@ -264,6 +265,10 @@ export function Add() {
           <Switch id="add-batch-mode" checked={batchMode} onCheckedChange={setBatchMode} />
           <Label htmlFor="add-batch-mode">Batch mode (keep shelf &amp; ownership between adds)</Label>
         </div>
+
+        <Link to="/import" className="block text-sm font-medium text-primary underline-offset-4 hover:underline">
+          Import a library from Goodreads instead
+        </Link>
 
         {submitError && (
           <Alert variant="destructive">
