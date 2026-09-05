@@ -9,7 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@electric-sql/client": "^1.5.24",
+    "@electric-sql/client": "1.5.24",
     "@electric-sql/pglite": "^0.5.4",
     "@fontsource/nunito": "^5.3.0",
     "@taakify/shared": "workspace:*",
