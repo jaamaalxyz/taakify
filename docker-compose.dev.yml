@@ -16,8 +16,16 @@ services:
       timeout: 3s
       retries: 10
 
+  # PINNED, not `latest` (issue #28): the Electric server's shape protocol
+  # evolves between releases, while apps/web pins @electric-sql/client — a
+  # floating tag silently changes the sync engine under the pinned client
+  # whenever anyone re-pulls, and a mid-session version change can wedge
+  # shape handles server-side (reloads never clear it; a container restart
+  # does). Verified compatible pair — bump BOTH together and re-verify a
+  # fresh signup reaches a synced SyncBadge (no "Sync unavailable") before
+  # committing the change.
   electric:
-    image: electricsql/electric:latest
+    image: electricsql/electric:1.7.7
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/taakify?sslmode=disable
       ELECTRIC_INSECURE: "true"   # dev only — Plan 5 configures auth for production
