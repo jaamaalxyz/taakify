@@ -34,6 +34,13 @@ vi.mock("./lib/db/pglite.js", () => ({
 // deterministic empty results instead of hanging on the stubbed `ready`.
 vi.mock("./lib/repo/books.js", () => ({ listBooks: vi.fn().mockResolvedValue([]) }));
 vi.mock("./lib/repo/tags.js", () => ({ listTags: vi.fn().mockResolvedValue([]) }));
+vi.mock("./lib/repo/home.js", () => ({
+  listOverdueLoans: vi.fn().mockResolvedValue([]),
+  listToReturnLoans: vi.fn().mockResolvedValue([]),
+  listCurrentlyReading: vi.fn().mockResolvedValue([]),
+  listRecentlyAdded: vi.fn().mockResolvedValue([]),
+  SECTION_CAP: 5,
+}));
 
 // AppShell wires an Electric shape sync gate (Task 4) that blocks its
 // children until `synced` is true. Real ShapeStreams would hit the network
@@ -99,7 +106,7 @@ describe("App routing", () => {
     expect(await screen.findByRole("heading", { name: "Name your library" })).toBeInTheDocument();
   });
 
-  it("redirects authenticated users away from /signin, to /library within the AppShell", async () => {
+  it("redirects authenticated users away from /signin, to Home within the AppShell", async () => {
     vi.mocked(authClient.useSession).mockReturnValue({ data: { user: {} }, isPending: false } as never);
     vi.mocked(api).mockImplementation(async (path: string) => {
       if (path === "/api/me") return me;
@@ -108,8 +115,20 @@ describe("App routing", () => {
       return { books: [] };
     });
     renderApp("/signin");
-    expect(await screen.findByRole("heading", { name: "Library" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
     expect(screen.getByText("Family Library")).toBeInTheDocument();
+  });
+
+  it("renders the Home page at / when authed with a household", async () => {
+    vi.mocked(authClient.useSession).mockReturnValue({ data: { user: {} }, isPending: false } as never);
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path === "/api/me") return me;
+      if (path.includes("/members")) return { members: [] };
+      return {};
+    });
+    renderApp("/");
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Library/ })).toBeInTheDocument();
   });
 
   it("renders the Library page under AppShell when authed with a household", async () => {
