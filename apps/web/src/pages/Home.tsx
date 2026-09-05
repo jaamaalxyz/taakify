@@ -123,6 +123,11 @@ function ReadingStrip({ name, rows, href }: { name: string; rows: ReadingStatusW
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium">{name}</p>
+        {/* `> SECTION_CAP`, not `=== SECTION_CAP` like LoanSection below --
+            listCurrentlyReading has no SQL LIMIT (capping is per-member,
+            client-side), so `rows` here is the true full count for this
+            member and "more than 5" is exact, unlike the loan sections'
+            already-capped query results (PR #29 review). */}
         {rows.length > SECTION_CAP && (
           <Link to={href} className="text-xs text-primary hover:underline">
             See all →
