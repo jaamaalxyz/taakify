@@ -75,6 +75,14 @@ function renderLibrary() {
   );
 }
 
+function renderLibraryAt(path: string) {
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      <Library />
+    </MemoryRouter>
+  );
+}
+
 beforeEach(() => {
   vi.mocked(listBooks).mockReset();
   vi.mocked(listTags).mockReset();
@@ -141,6 +149,27 @@ describe("Library", () => {
       expect(listBooks).toHaveBeenLastCalledWith(
         expect.objectContaining({ status: "reading", statusUserId: "u1" })
       )
+    );
+  });
+
+  it("initializes the status filter from a ?status= deep link (Home's 'See all' link, PR #29 review)", async () => {
+    mockRepo(() => []);
+    renderLibraryAt("/library?status=reading&statusUserId=u2");
+
+    await waitFor(() =>
+      expect(listBooks).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "reading", statusUserId: "u2" })
+      )
+    );
+    expect(screen.getByRole("combobox", { name: "Status" })).toHaveTextContent("Reading");
+  });
+
+  it("ignores an invalid ?status= value and falls back to All statuses", async () => {
+    mockRepo(() => []);
+    renderLibraryAt("/library?status=not-a-real-status");
+
+    await waitFor(() =>
+      expect(listBooks).toHaveBeenCalledWith(expect.objectContaining({ status: undefined }))
     );
   });
 

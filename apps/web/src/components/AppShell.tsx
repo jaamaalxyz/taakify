@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Library, Plus, HandCoins, User, LogOut } from "lucide-react";
+import { Home as HomeIcon, Library, Plus, HandCoins, User, LogOut } from "lucide-react";
 import { authClient } from "../lib/auth.js";
 import { HouseholdProvider, useHousehold } from "../lib/household-context.js";
 import { db, closeLocalDatabase, IDB_DATABASE_NAME, ready } from "../lib/db/pglite.js";
@@ -207,7 +207,8 @@ function AppHeader() {
 
 function TabBar() {
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-4 border-t bg-background py-2">
+    <nav className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-5 border-t bg-background py-2">
+      <TabLink to="/" label="Home" icon={HomeIcon} />
       <TabLink to="/library" label="Library" icon={Library} />
       <TabLink to="/add" label="Add" icon={Plus} />
       <TabLink to="/loans" label="Loans" icon={HandCoins} />

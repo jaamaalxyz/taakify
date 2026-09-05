@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { BookOpen } from "lucide-react";
 import { useHousehold } from "../lib/household-context.js";
 import { listBooks } from "../lib/repo/books.js";
@@ -59,7 +59,18 @@ export function Library() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [ownership, setOwnership] = useState<Ownership | "">("");
-  const [statusFilter, setStatusFilter] = useState<string>(ALL_STATUSES);
+  // Deep-link support for Home's "See all →" reading-strip link
+  // (/library?status=reading&statusUserId={id}) -- read once on mount, not
+  // kept in sync with the URL afterward, so the user can freely change
+  // filters from here without the link snapping them back.
+  const [searchParams] = useSearchParams();
+  const [statusFilter, setStatusFilter] = useState<string>(() => {
+    const linked = searchParams.get("status");
+    return linked && READING_STATUS_ORDER.includes(linked as ReadingStatus) ? linked : ALL_STATUSES;
+  });
+  const [linkedStatusUserId] = useState<string | undefined>(
+    () => searchParams.get("statusUserId") ?? undefined
+  );
   const [tagFilter, setTagFilter] = useState<string>(ALL_TAGS);
   const [tags, setTags] = useState<Tag[]>([]);
   const [books, setBooks] = useState<LibraryBook[] | null>(null);
@@ -107,7 +118,7 @@ export function Library() {
       q: debouncedSearch || undefined,
       ownership: ownership || undefined,
       status: statusFilter !== ALL_STATUSES ? statusFilter : undefined,
-      statusUserId: statusFilter !== ALL_STATUSES ? user.id : undefined,
+      statusUserId: statusFilter !== ALL_STATUSES ? (linkedStatusUserId ?? user.id) : undefined,
       tag: tagFilter !== ALL_TAGS ? tagFilter : undefined,
       offset: offset > 0 ? offset : undefined,
     };
