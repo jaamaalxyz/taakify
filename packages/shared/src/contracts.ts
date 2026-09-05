@@ -217,3 +217,13 @@ export interface LoanResponse {
 export interface ListLoansResponse {
   loans: Loan[];
 }
+
+// Plan 7: cover image upload. JSON body (a base64 data URL), not multipart,
+// so the request replays through the web client's offline outbox unchanged.
+export interface UploadCoverRequest {
+  data_url: string;
+}
+
+export interface UploadCoverResponse {
+  cover_url: string;
+}

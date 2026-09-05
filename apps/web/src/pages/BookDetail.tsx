@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { BookOpen, MoreVertical } from "lucide-react";
+import { MoreVertical } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
 import { getBook, updateBook, deleteBook } from "../lib/repo/books.js";
@@ -9,6 +9,7 @@ import { listBookTags, findOrCreateTag, attachBookTag, removeBookTag } from "../
 import { listBookcases } from "../lib/repo/shelves.js";
 import { listTags } from "../lib/repo/tags.js";
 import { listContacts } from "../lib/repo/contacts.js";
+import { CoverUpload } from "../components/CoverUpload.js";
 import { listLoans, createLoan, updateLoan } from "../lib/repo/loans.js";
 import { onMirrorChange } from "../lib/sync/shape.js";
 import { useUnsyncedIds } from "../lib/sync/use-unsynced-ids.js";
@@ -451,7 +452,10 @@ export function BookDetail() {
             {book.edition.cover_url ? (
               <img src={book.edition.cover_url} alt="" className="h-full w-full object-cover" />
             ) : (
-              <BookOpen className="h-8 w-8 text-muted-foreground" aria-hidden="true" />
+              // Gap-filling per spec: local titles often have no online
+              // cover, so the placeholder becomes the camera-upload entry
+              // point (Plan 7) rather than a bare icon.
+              <CoverUpload editionId={book.edition.id} />
             )}
           </div>
           <div className="space-y-1">
