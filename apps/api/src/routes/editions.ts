@@ -141,7 +141,7 @@ editions.post("/:id/cover", async (c) => {
   if (!/^[0-9a-fA-F-]{36}$/.test(editionId)) return c.json({ error: "invalid edition id" }, 400);
 
   const storage = getStorage();
-  const key = coverKey(editionId);
+  const key = coverKey(editionId, contentType);
 
   try {
     // Existence check only — no lock held yet (PR #31 review): storage.put
@@ -169,17 +169,27 @@ editions.post("/:id/cover", async (c) => {
     // two racing uploads can't both see (and both delete) the same
     // previous object; the loser just overwrites the winner's row, same
     // last-write-wins as every other edition write.
-    const oldUrl = await withUser(user.id, async (client) => {
-      const { rows } = await client.query(
-        "SELECT cover_url FROM edition WHERE id = $1 FOR UPDATE",
-        [editionId]
-      );
-      await client.query(
-        "UPDATE edition SET cover_url = $2, updated_at = now() WHERE id = $1",
-        [editionId, url]
-      );
-      return (rows[0]?.cover_url as string | null) ?? null;
-    });
+    let oldUrl: string | null;
+    try {
+      oldUrl = await withUser(user.id, async (client) => {
+        const { rows } = await client.query(
+          "SELECT cover_url FROM edition WHERE id = $1 FOR UPDATE",
+          [editionId]
+        );
+        await client.query(
+          "UPDATE edition SET cover_url = $2, updated_at = now() WHERE id = $1",
+          [editionId, url]
+        );
+        return (rows[0]?.cover_url as string | null) ?? null;
+      });
+    } catch (err) {
+      // The object we just uploaded is now unreferenced — clean it up so a
+      // transient DB failure doesn't leave a permanent storage orphan.
+      await storage.delete(key).catch((cleanupErr) => {
+        console.error("[storage] failed to clean up orphaned cover after DB error", key, cleanupErr);
+      });
+      throw err;
+    }
 
     // Best-effort cleanup of the object we just replaced — never external
     // URLs (Open Library / Google Books covers aren't ours to delete) and

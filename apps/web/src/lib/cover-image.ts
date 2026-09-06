@@ -26,7 +26,7 @@ export function __setBitmapPipelineForTests(p: BitmapPipeline | undefined): void
   pipelineOverride = p;
 }
 
-type AnyBitmap = ImageBitmap | { width: number; height: number };
+type AnyBitmap = ImageBitmap | { width: number; height: number; img?: HTMLImageElement };
 
 // Safari (and older browsers) lack createImageBitmap; fall back to an
 // <img> + object URL decode, which every target browser supports.
@@ -40,7 +40,7 @@ async function loadBitmapViaImg(file: File): Promise<AnyBitmap> {
       img.onerror = () => reject(new Error("image decode failed"));
       img.src = url;
     });
-    return { width: img.naturalWidth, height: img.naturalHeight, img } as AnyBitmap;
+    return { width: img.naturalWidth, height: img.naturalHeight, img };
   } finally {
     // Safe to revoke once decoded: the canvas draw below reads pixels from
     // the already-loaded element, not the URL.
@@ -54,7 +54,8 @@ function canvasDraw(bitmap: AnyBitmap, width: number, height: number): string {
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("canvas unavailable");
-  ctx.drawImage(bitmap as CanvasImageSource, 0, 0, width, height);
+  const source: CanvasImageSource = "img" in bitmap && bitmap.img ? bitmap.img : (bitmap as CanvasImageSource);
+  ctx.drawImage(source, 0, 0, width, height);
   return canvas.toDataURL("image/jpeg", 0.8);
 }
 

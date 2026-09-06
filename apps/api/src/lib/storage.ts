@@ -25,9 +25,16 @@ export function validateKey(key: string): void {
   }
 }
 
+const COVER_EXTENSIONS: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+
 /** Object key for a new edition cover. UUID per upload so outbox replays never collide. */
-export function coverKey(editionId: string): string {
-  return `covers/${editionId}/${randomUUID()}.jpg`;
+export function coverKey(editionId: string, contentType: string): string {
+  const ext = COVER_EXTENSIONS[contentType] ?? "jpg";
+  return `covers/${editionId}/${randomUUID()}.${ext}`;
 }
 
 // Dev base: served by the GET /api/storage/* route (storage-dev.ts). When
@@ -87,8 +94,8 @@ class FsStorage implements Storage {
 export async function readFsObject(
   key: string
 ): Promise<{ bytes: Buffer; contentType: string } | null> {
-  const full = fsPath(key);
   try {
+    const full = fsPath(key);
     const [bytes, meta] = await Promise.all([
       readFile(full),
       readFile(`${full}.meta.json`, "utf8").catch(() => null),
