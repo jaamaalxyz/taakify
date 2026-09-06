@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { auth } from "./auth.js";
 import { requireUser } from "./middleware/session.js";
 import { withUser } from "./db/tenant.js";
@@ -12,10 +13,20 @@ import { tags, bookTags } from "./routes/tags.js";
 import { contacts } from "./routes/contacts.js";
 import { loans } from "./routes/loans.js";
 import { bootstrap } from "./routes/bootstrap.js";
+import { storageDev } from "./routes/storage-dev.js";
 
 export const app = new Hono();
 
 app.get("/api/health", (c) => c.json({ ok: true }));
+
+// Cap request bodies app-wide (PR #31 re-check): the cover-upload route's
+// 2MB decoded-image limit is only checked after the JSON body has been
+// fully buffered, parsed, and base64-decoded, so without this a single
+// authenticated request could exhaust memory/CPU first. 4MB comfortably
+// covers base64 inflation of a 2MB image (~2.7MB) plus envelope, while
+// every other route's JSON payload is a few KB at most. Exceeding it
+// fails fast with 413 before any handler work.
+app.use("*", bodyLimit({ maxSize: 4 * 1024 * 1024 }));
 
 // better-auth does its own method dispatch; forward every verb so OAuth
 // callbacks and sign-out aren't 404'd before reaching it.
@@ -55,3 +66,5 @@ app.route("/api/books", bookTags);
 app.route("/api/contacts", contacts);
 app.route("/api/loans", loans);
 app.route("/api/bootstrap", bootstrap);
+// Dev-only object serving for the fs storage impl (see storage-dev.ts).
+app.route("/api/storage", storageDev);

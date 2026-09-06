@@ -21,6 +21,7 @@
 // (a React effect today, a service worker later).
 import { toast } from "sonner";
 import { db, ready } from "../db/pglite.js";
+import { notifyMirrorChange } from "./shape.js";
 
 // Retry backoff schedule in milliseconds, per the plan brief ("1s, 2s, 5s,
 // 15s, 60s, then dead-letter"). `attempts` counts failures so far; the Nth
@@ -142,6 +143,16 @@ export async function enqueue(
   });
 
   notifyOutboxChange();
+  // An applied optimistic write IS a mirror-data change — fire the same
+  // notification shape.ts's applyChangeTo does, so any screen re-reading
+  // via onMirrorChange (Library/Home/BookDetail's mirrorTick effects)
+  // reflects the optimistic write immediately instead of only after the
+  // server's row streams back through Electric (PR #31 re-check: the
+  // cover preview was otherwise invisible until navigation). No import
+  // cycle: shape.ts depends only on the db + Electric client modules.
+  // notifyMirrorChange debounces/coalesces, so the double fire when a
+  // streamed row later overwrites the optimistic one costs nothing.
+  if (statements.length > 0) notifyMirrorChange();
   // Don't wait for the next periodic tick (up to 5s, see
   // startOutboxWorker's comment) to send a write made while online -- fire
   // a flush immediately after committing. Deliberately not awaited: enqueue

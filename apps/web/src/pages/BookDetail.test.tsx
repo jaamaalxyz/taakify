@@ -13,6 +13,11 @@ import { listLoans, createLoan, updateLoan } from "../lib/repo/loans.js";
 import { useHousehold } from "../lib/household-context.js";
 import { toast } from "sonner";
 
+vi.mock("../components/CoverUpload.js", () => ({
+  // Stub: the real component pulls in the outbox/pglite worker chain,
+  // which jsdom can't host; it has its own dedicated test file.
+  CoverUpload: () => null,
+}));
 vi.mock("../lib/repo/books.js", () => ({
   getBook: vi.fn(),
   updateBook: vi.fn(),

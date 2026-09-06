@@ -1,5 +1,8 @@
 import { Hono } from "hono";
 import { requireUser, type SessionUser } from "../middleware/session.js";
+import { withUser } from "../db/tenant.js";
+import { getStorage, coverKey, keyFromUrl, isOurUrl } from "../lib/storage.js";
+import type { UploadCoverRequest, UploadCoverResponse } from "@taakify/shared";
 
 export const editions = new Hono<{ Variables: { user: SessionUser } }>();
 
@@ -105,4 +108,103 @@ editions.get("/lookup", async (c) => {
   if (!result || !result.title) return c.json({ error: "not found" }, 404);
 
   return c.json(result);
+});
+
+// POST /api/editions/:id/cover (Plan 7) — attach a camera/photo cover to an
+// edition that has no online cover. Body is JSON `{ data_url }` (a base64
+// data URL), NOT multipart, deliberately: the web client enqueues this
+// through the offline outbox, which replays plain JSON requests — binary
+// upload would bypass that queue and lose offline support (spec §7: photos
+// taken offline queue in the outbox).
+//
+// Editions are the global shared catalog (open RLS by design), so any
+// authenticated member can improve a cover for everyone; no household
+// scoping beyond requireUser.
+const COVER_DATA_URL_RE = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/;
+
+// Defense in depth: the web client already downscales to a cover-sized JPEG
+// (~60-150 KB) before enqueueing, but the API is reachable by anything with
+// a session, so it enforces its own decoded-size cap.
+export const MAX_COVER_BYTES = 2 * 1024 * 1024;
+
+editions.post("/:id/cover", async (c) => {
+  const user = c.get("user");
+  const body = await c.req.json().catch(() => null) as UploadCoverRequest | null;
+  const match = body?.data_url?.match(COVER_DATA_URL_RE);
+  if (!match) return c.json({ error: "data_url must be a base64 image/(jpeg|png|webp) data URL" }, 400);
+  const [, contentType, base64] = match;
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.byteLength === 0) return c.json({ error: "data_url is empty" }, 400);
+  if (bytes.byteLength > MAX_COVER_BYTES) return c.json({ error: "cover image too large" }, 413);
+
+  const editionId = c.req.param("id");
+  if (!/^[0-9a-fA-F-]{36}$/.test(editionId)) return c.json({ error: "invalid edition id" }, 400);
+
+  const storage = getStorage();
+  const key = coverKey(editionId, contentType);
+
+  try {
+    // Existence check only — no lock held yet (PR #31 review): storage.put
+    // is an unbounded network round-trip to the object store in production,
+    // and running it inside withUser would hold a pooled app-role
+    // connection (pool max is small) for the duration, letting a few slow
+    // uploads starve unrelated tenant-data requests.
+    const exists = await withUser(user.id, async (client) => {
+      const { rows } = await client.query(
+        "SELECT 1 FROM edition WHERE id = $1 AND deleted_at IS NULL",
+        [editionId]
+      );
+      return rows.length > 0;
+    });
+    if (!exists) return c.json({ error: "edition not found" }, 404);
+
+    // Upload before touching the row: a failed put must leave the edition
+    // pointing at its old cover. (If the edition is deleted between the
+    // check and the update, this leaves one orphaned object — acceptable
+    // and better than holding a DB connection across the network I/O.)
+    await storage.put(key, contentType, bytes);
+    const url = storage.url(key);
+
+    // Short, SQL-only transaction. `FOR UPDATE` pins the old cover_url so
+    // two racing uploads can't both see (and both delete) the same
+    // previous object; the loser just overwrites the winner's row, same
+    // last-write-wins as every other edition write.
+    let oldUrl: string | null;
+    try {
+      oldUrl = await withUser(user.id, async (client) => {
+        const { rows } = await client.query(
+          "SELECT cover_url FROM edition WHERE id = $1 FOR UPDATE",
+          [editionId]
+        );
+        await client.query(
+          "UPDATE edition SET cover_url = $2, updated_at = now() WHERE id = $1",
+          [editionId, url]
+        );
+        return (rows[0]?.cover_url as string | null) ?? null;
+      });
+    } catch (err) {
+      // The object we just uploaded is now unreferenced — clean it up so a
+      // transient DB failure doesn't leave a permanent storage orphan.
+      await storage.delete(key).catch((cleanupErr) => {
+        console.error("[storage] failed to clean up orphaned cover after DB error", key, cleanupErr);
+      });
+      throw err;
+    }
+
+    // Best-effort cleanup of the object we just replaced — never external
+    // URLs (Open Library / Google Books covers aren't ours to delete) and
+    // never a reason to fail an otherwise-successful upload.
+    const oldKey = oldUrl && isOurUrl(oldUrl) ? keyFromUrl(oldUrl) : null;
+    if (oldKey) {
+      await storage.delete(oldKey).catch((err) => {
+        console.error("[storage] failed to delete replaced cover", oldKey, err);
+      });
+    }
+
+    const response: UploadCoverResponse = { cover_url: url };
+    return c.json(response);
+  } catch (err) {
+    console.error("[editions] cover upload failed", err);
+    return c.json({ error: "cover upload failed" }, 500);
+  }
 });
