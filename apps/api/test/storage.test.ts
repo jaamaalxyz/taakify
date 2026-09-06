@@ -17,7 +17,6 @@ let dir: string;
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "taakify-storage-"));
-  vi.stubEnv("STORAGE_FS_DIR", dir);
   vi.unstubAllEnvs();
   vi.stubEnv("STORAGE_FS_DIR", dir);
   __resetStorageForTests();

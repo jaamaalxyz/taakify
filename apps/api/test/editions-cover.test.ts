@@ -153,4 +153,15 @@ describe("POST /api/editions/:id/cover", () => {
     const res = await postCover({ data_url: huge });
     expect(res.status).toBe(413);
   });
+
+  it("rejects oversized raw bodies via the app-wide body limit before any handler work", async () => {
+    // 6MB of JSON — over the 4MB app limit, under nothing else that would
+    // stop it earlier. Must 413 regardless of content validity.
+    const res = await app.request(`/api/editions/${editionId}/cover`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ data_url: "x".repeat(6 * 1024 * 1024) }),
+    });
+    expect(res.status).toBe(413);
+  });
 });

@@ -114,7 +114,10 @@ const MIRROR_CHANGE_DEBOUNCE_MS = 200;
 const mirrorChangeListeners = new Set<() => void>();
 let mirrorChangeTimer: ReturnType<typeof setTimeout> | undefined;
 
-function notifyMirrorChange(): void {
+// Exported (not just internal) for outbox.ts: an applied optimistic write
+// is as much a mirror change as a streamed Electric row, and screens that
+// re-read via onMirrorChange need to hear about it (PR #31 re-check).
+export function notifyMirrorChange(): void {
   if (mirrorChangeTimer !== undefined) return;
   mirrorChangeTimer = setTimeout(() => {
     mirrorChangeTimer = undefined;
@@ -126,7 +129,6 @@ export function onMirrorChange(callback: () => void): () => void {
   mirrorChangeListeners.add(callback);
   return () => mirrorChangeListeners.delete(callback);
 }
-
 // For tests only — clears any pending debounce timer so a lingering
 // callback from one test can't fire during (or after) a later one.
 export function __resetMirrorChangeForTests(): void {

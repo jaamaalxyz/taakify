@@ -64,4 +64,17 @@ describe("uploadEditionCover", () => {
     );
     expect(rows[0].touched).toEqual([{ table: "edition", id: EDITION }]);
   });
+
+  it("fires onMirrorChange so screens re-read the optimistic cover immediately", async () => {
+    const { onMirrorChange } = await import("../sync/shape.js");
+    let fired = 0;
+    const unsubscribe = onMirrorChange(() => fired++);
+
+    await uploadEditionCover(EDITION, DATA_URL);
+    // notifyMirrorChange coalesces via a 200ms leading-edge debounce.
+    await new Promise((r) => setTimeout(r, 300));
+    unsubscribe();
+
+    expect(fired).toBeGreaterThanOrEqual(1);
+  });
 });
