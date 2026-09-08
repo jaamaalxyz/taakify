@@ -13,6 +13,7 @@ import { tags, bookTags } from "./routes/tags.js";
 import { contacts } from "./routes/contacts.js";
 import { loans } from "./routes/loans.js";
 import { bootstrap } from "./routes/bootstrap.js";
+import { syncShape } from "./routes/sync-shape.js";
 import { storageDev } from "./routes/storage-dev.js";
 
 export const app = new Hono();
@@ -66,5 +67,6 @@ app.route("/api/books", bookTags);
 app.route("/api/contacts", contacts);
 app.route("/api/loans", loans);
 app.route("/api/bootstrap", bootstrap);
+app.route("/api/sync/shape", syncShape);
 // Dev-only object serving for the fs storage impl (see storage-dev.ts).
 app.route("/api/storage", storageDev);
