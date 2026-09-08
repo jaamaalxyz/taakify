@@ -29,11 +29,12 @@ Goals:
   automated off-VM database backups.
 - Give unauthenticated visitors a minimal landing page instead of a bare
   sign-in form.
-- Catch production errors (server and client) via self-hosted, open-source
-  error tracking — consistent with the original spec's "every component
-  open source, no proprietary services" principle where practical (see
-  the Cloudflare Tunnel note in §3 for the one additional exception this
-  pass accepts, alongside the existing R2 exception).
+- Catch production errors (server and client) via Sentry (SaaS, free
+  Developer tier) — a deliberate exception to the original spec's "every
+  component open source, no proprietary services" principle, alongside
+  Cloudflare Tunnel (§3) and R2, chosen because the free-tier VM's limited
+  RAM/CPU can't comfortably absorb a self-hosted error-tracking stack's
+  own Postgres+Redis footprint on top of the app stack.
 - Add the Playwright E2E suite (gap #5 from the 2026-09-03 audit) as both
   general regression coverage and a pre-launch smoke test against the
   production build.
@@ -45,9 +46,10 @@ Non-Goals (this pass):
   static page is enough.
 - Cross-household features, public household directory, book-club
   households — V2.
-- OpenTelemetry tracing/metrics stack (Grafana/Tempo/Loki/Prometheus) — the
-  free-tier VM's RAM is better spent on GlitchTip (error tracking only) for
-  now; revisit if real performance problems appear.
+- OpenTelemetry tracing/metrics stack (Grafana/Tempo/Loki/Prometheus) —
+  the free-tier VM's RAM is not available for a self-hosted observability
+  stack of any kind (error tracking included, hence Sentry SaaS above);
+  revisit if real performance problems appear.
 - High-availability/multi-VM setup — single VM, matching the original
   spec's $0/month hosting goal. Acceptable risk at this scale as long as
   backups are off-VM.
@@ -56,14 +58,14 @@ Non-Goals (this pass):
 
 ### New components
 
-| Component      | Choice                                                 | Role                                                                        |
-| -------------- | ------------------------------------------------------ | --------------------------------------------------------------------------- |
-| Edge/TLS       | Cloudflare Tunnel (`cloudflared`)                      | Outbound-only tunnel to Cloudflare's edge; Cloudflare terminates TLS and routes to the tunnel — no inbound ports needed on the VM |
-| API runtime    | Docker image (Node), built from `apps/api/Dockerfile`  | Runs the existing Hono API in production                                    |
-| Web runtime    | Docker image (nginx), built from `apps/web/Dockerfile` | Serves the Vite production build (static SPA)                               |
-| Error tracking | GlitchTip (self-hosted, Sentry-SDK-compatible)         | Captures server + client exceptions with stack traces/context               |
-| Backups        | `pg_dump` sidecar container + cron                     | Nightly dump, rotated, pushed off-VM                                        |
-| E2E            | Playwright                                             | Smoke-tests the five screens + one offline scenario against a running build |
+| Component      | Choice                                                  | Role |
+| -------------- | -------------------------------------------------------- | ---- |
+| Edge/TLS       | Cloudflare Tunnel (`cloudflared`)                        | Outbound-only tunnel to Cloudflare's edge; Cloudflare terminates TLS and routes to the tunnel — no inbound ports needed on the VM |
+| API runtime    | Docker image (Node), built from `apps/api/Dockerfile`     | Runs the existing Hono API in production |
+| Web runtime    | Docker image (nginx), built from `apps/web/Dockerfile`    | Serves the Vite production build (static SPA) |
+| Error tracking | Sentry (SaaS, free Developer tier)                        | Captures server + client exceptions with stack traces/context |
+| Backups        | `pg_dump` sidecar container + cron                        | Nightly dump, rotated, pushed off-VM |
+| E2E            | Playwright                                                | Smoke-tests the five screens + one offline scenario against a running build |
 
 Everything else — PGlite, ElectricSQL, better-auth, RLS, the outbox sync
 layer, the storage abstraction — is unchanged; this spec is purely the
@@ -83,7 +85,7 @@ requires 80/443 open on the VM and self-managed cert renewal).
 
 ### Deployment topology
 
-```
+```text
 Internet
    │
    ▼
@@ -97,7 +99,7 @@ Internet
    │
    ├──> Postgres container (adminPool + appPool, RLS)
    ├──> Electric container (shape streams, reads Postgres)
-   └──> GlitchTip container (error events)
+   └──> Sentry SaaS (error events, over the internet — no local container)
    │
    └──> pg_dump sidecar (cron, writes to volume, rclone off-VM)
 ```
@@ -127,11 +129,9 @@ build` in a Node stage, copy `dist/` into an nginx stage. nginx serves
   the SPA with a catch-all `try_files ... /index.html` for client-side
   routing.
 - **`docker-compose.prod.yml`** — Postgres (named volume for data),
-  Electric, api, web, `cloudflared`, GlitchTip (plus GlitchTip's own
-  dependencies — it needs its own Postgres + Redis; check current
-  GlitchTip docker-compose reference at implementation time and either
-  run a second lightweight Postgres or point it at the same instance in a
-  separate database), and the backup sidecar.
+  Electric, api, web, `cloudflared`, and the backup sidecar. No local
+  error-tracking container — Sentry is an outbound SaaS dependency, which
+  is the point: it adds zero RAM/CPU footprint to the VM.
 - **Cloudflare setup (one-time, outside the compose stack)** — create a
   Tunnel in the Cloudflare dashboard (or `cloudflared tunnel create`),
   add a CNAME record pointing the domain at `<tunnel-id>.cfargotunnel.com`,
@@ -143,11 +143,11 @@ build` in a Node stage, copy `dist/` into an nginx stage. nginx serves
   `auth.ts` already throws if unset, so this is enforced), `BETTER_AUTH_URL`
   (the real domain), `GOOGLE_CLIENT_ID`/`SECRET` (optional), `STORAGE_*`
   (optional — falls back to local-disk storage per the existing
-  `storage.ts` logic if unset), `GLITCHTIP_DSN` (server), a
-  client-exposed GlitchTip DSN for the web build, `CLOUDFLARE_TUNNEL_TOKEN`.
-- **Backups** — nightly `pg_dump` of the primary Postgres database (not
-  GlitchTip's) to a mounted volume, rotated (e.g. keep 14 daily), then
-  synced off-VM via `rclone` to an R2 bucket or similar. A single VM with
+  `storage.ts` logic if unset), `SENTRY_DSN` (server), a client-exposed
+  Sentry DSN for the web build, `CLOUDFLARE_TUNNEL_TOKEN`.
+- **Backups** — nightly `pg_dump` of the primary Postgres database to a
+  mounted volume, rotated (e.g. keep 14 daily), then synced off-VM via
+  `rclone` to an R2 bucket or similar. A single VM with
   only on-VM backups is not a real backup — losing the VM loses the backups
   too, so the off-VM push is required, not optional.
 - **Deploy runbook** — a new `docs/deploy.md`: provision VM → configure
@@ -212,30 +212,38 @@ being redirected straight into the app as today.
 
 ## 8. Observability
 
-- GlitchTip container added to `docker-compose.prod.yml` (with its own
-  Postgres/Redis dependencies as required by its own compose reference).
-- Server: wrap the Hono API with the Sentry Node SDK (GlitchTip is
-  protocol-compatible), pointed at the self-hosted DSN via
-  `GLITCHTIP_DSN`.
-- Client: initialize the Sentry browser SDK in `apps/web` with a
-  client-safe DSN, capturing unhandled exceptions and (optionally) the
-  outbox's dead-letter events, since a silently-dead-lettered offline
+- Create a Sentry SaaS project (free Developer tier) — no container, no
+  RAM/CPU cost on the VM, at the cost of being a third-party proprietary
+  dependency for error data (accepted per §2/§3).
+- Server: wrap the Hono API with `@sentry/node`, pointed at `SENTRY_DSN`;
+  capture unhandled exceptions/rejections, and explicitly call
+  `Sentry.captureException` from Hono's `onError` handler since there's
+  no dedicated Sentry-Hono integration package.
+- Client: initialize `@sentry/react` (or `@sentry/browser`) in `apps/web`
+  with a client-safe DSN, capturing unhandled exceptions and (optionally)
+  the outbox's dead-letter events, since a silently-dead-lettered offline
   write is exactly the kind of bug that's invisible without error
   tracking.
-- No OTel tracing/metrics in this pass (see Non-Goals) — GlitchTip gives
+- Watch the free Developer tier's event-volume and retention limits
+  (verify current numbers on Sentry's pricing page at implementation
+  time) — if the household + friends' usage approaches the cap, either
+  filter/sample noisy error types or revisit self-hosting once the VM's
+  resource situation changes.
+- No OTel tracing/metrics in this pass (see Non-Goals) — Sentry gives
   error visibility, which is the immediate need; tracing/metrics are
   deferred until there's a concrete performance question to answer.
 
 ## 9. Error Handling
 
 - Deploy runbook failures (migration error, container crash-loop) are
-  operator-visible via `docker compose logs` and GlitchTip; no new
-  in-app error handling paths are introduced by this spec beyond wiring
-  existing errors into GlitchTip.
+  operator-visible via `docker compose logs` and Sentry; no new in-app
+  error handling paths are introduced by this spec beyond wiring existing
+  errors into Sentry.
 - Backup failures — the `pg_dump` cron should alert (at minimum, fail
-  loudly into GlitchTip or an equivalent notification) rather than fail
-  silently, since a backup that quietly stops running is worse than no
-  backup at all (false confidence).
+  loudly into Sentry, e.g. via a manual `captureMessage` call on non-zero
+  exit, or an equivalent notification) rather than fail silently, since a
+  backup that quietly stops running is worse than no backup at all (false
+  confidence).
 
 ## 10. Testing
 
@@ -255,9 +263,10 @@ being redirected straight into the app as today.
 2. **Security hardening pass** — firewall, rate limiting, security-review,
    cookie flags. (Must happen before real strangers' data lands on the
    box.)
-3. **GlitchTip** — wired in alongside the security pass since error
-   visibility from day one of real traffic is valuable, and it's an
-   isolated addition to the compose stack.
+3. **Sentry** — wired in alongside the security pass since error
+   visibility from day one of real traffic is valuable; being a SaaS
+   dependency with no container, it can be added independently of the
+   compose stack's own readiness.
 4. **Landing page** — cheap, no dependencies on the above beyond having a
    deployed app to link into.
 5. **Playwright E2E** — most valuable once there's a production build to
@@ -265,11 +274,9 @@ being redirected straight into the app as today.
 
 ## 12. Open Questions for Implementation Time
 
-- GlitchTip's own dependency footprint (Postgres + Redis) on a free-tier
-  ARM VM should be checked against actual available RAM before commit —
-  if too heavy, a lighter alternative (e.g. plain structured logging to a
-  file, revisited later) may be substituted, but GlitchTip is the
-  default per this spec.
+- Confirm current Sentry free-tier limits (event volume, retention, seats)
+  on Sentry's pricing page before wiring it in, since SaaS pricing tiers
+  change and this spec's numbers may drift out of date.
 - Whether `apps/api`'s existing build step (if any) needs adjustment for
   a production Docker image — check current `package.json` build script
   during implementation.
