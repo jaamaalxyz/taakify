@@ -26,7 +26,10 @@ Goals:
   free-tier ARM VM), reachable over HTTPS at a real domain.
 - Make the app safe to expose to strangers' data: firewalled VM, rate-limited
   auth endpoints, a security-review pass over the RLS/auth code path,
-  automated off-VM database backups.
+  automated off-VM database backups, and — found during this spec's own
+  planning, see §3 — closing the dev-only Electric shape-endpoint gap
+  where the browser talks to Electric directly with no server-side
+  household check.
 - Give unauthenticated visitors a minimal landing page instead of a bare
   sign-in form.
 - Catch production errors (server and client) via Sentry (SaaS, free
@@ -96,9 +99,10 @@ Internet
    │ /api/* → api:3001                     │ everything else → web:80
    ▼                                        ▼
  apps/api container            apps/web container (nginx, static build)
-   │
+   │  proxies /api/sync/shape/* to Electric
    ├──> Postgres container (adminPool + appPool, RLS)
-   ├──> Electric container (shape streams, reads Postgres)
+   ├──> Electric container (shape streams, reads Postgres —
+   │      NOT reachable from cloudflared/internet, compose-internal only)
    └──> Sentry SaaS (error events, over the internet — no local container)
    │
    └──> pg_dump sidecar (cron, writes to volume, rclone off-VM)
@@ -107,17 +111,57 @@ Internet
 `cloudflared` dials out to Cloudflare — no port is opened on the VM for
 inbound web traffic at all (80/443 stay closed; see §5). All other
 containers communicate over the compose-internal Docker network, matching
-the existing dev Postgres/Electric relationship.
+the existing dev Postgres/Electric relationship — with one deliberate
+exception to that dev topology, described next.
+
+### Electric shape proxy (new — closes a dev-only security gap)
+
+**Problem found during planning:** in dev, `apps/web/src/lib/sync/shape.ts`
+talks to Electric **directly** from the browser, sending a client-built
+`where=household_id = $1` query parameter (`shape.ts:550,571-579`). This
+only works safely in dev because `ELECTRIC_INSECURE=true`
+(`docker-compose.dev.yml:31`) makes Electric skip its own request auth
+entirely. If Electric were ever reachable from the internet in that mode,
+any client could set `household_id` to any other household's UUID and
+read that household's books/loans/contacts straight out of Electric —
+completely bypassing the RLS policies in `migrations/0003_rls.sql`, since
+Electric itself never checks who's asking. The original spec draft's
+Cloudflare ingress (`/api/*` + catch-all only) also never routed to
+Electric at all, which would have simply broken sync in production
+without this fix.
+
+**Resolution:** Electric is never exposed to the internet. It stays on
+the compose-internal Docker network only, reachable exclusively from the
+`api` container. The API gains a new authenticated proxy route (e.g.
+`GET /api/sync/shape/:table`) that:
+
+1. Runs `requireUser` (existing session middleware) to identify the
+   caller.
+2. Looks up the caller's household via existing membership logic (same
+   pattern as other tenant routes).
+3. Forwards the request to Electric's internal shape endpoint with the
+   `where` clause **set server-side** from the authenticated household id
+   (never trusting a client-supplied household id), and streams Electric's
+   response back to the browser.
+
+`apps/web/src/lib/sync/shape.ts` changes its `ELECTRIC_URL` to point at
+this new `/api/sync/shape` route instead of Electric directly; the
+`where`/`params` construction in `subscribeTable` (`shape.ts:550`) is
+simplified since the server now derives the household id from the
+session rather than trusting a client-passed value in `params`. This is
+an application-code change (API + web), not purely infra config, and is
+scheduled as its own plan before the Cloudflare ingress work, since the
+ingress design depends on Electric never being publicly routable.
 
 ### Data flow changes
 
-None at the application level. Client PGlite mirrors, Electric shape
-streams, and the outbox queue behave identically against a production
-Postgres as they do against the dev one — the only change is the network
-path (HTTPS via Cloudflare's edge + the tunnel instead of the Vite dev
-proxy) and that `BETTER_AUTH_URL` / cookie flags now reflect a real HTTPS
-origin (`Secure`, `SameSite=Lax` — verify this differs from whatever the
-dev config currently assumes for `http://localhost`).
+Beyond the shape proxy above, no other data-flow changes. Client PGlite
+mirrors and the outbox queue behave identically against a production
+Postgres as they do against the dev one — the remaining changes are the
+network path (HTTPS via Cloudflare's edge + the tunnel instead of the
+Vite dev proxy) and that `BETTER_AUTH_URL` / cookie flags now reflect a
+real HTTPS origin (`Secure`, `SameSite=Lax` — verify this differs from
+whatever the dev config currently assumes for `http://localhost`).
 
 ## 4. Production Infrastructure
 
@@ -257,19 +301,26 @@ being redirected straight into the app as today.
 
 ## 11. Sequencing
 
-1. **Infrastructure** — Dockerfiles, `docker-compose.prod.yml`, deploy
-   runbook, backups. (Prerequisite for everything else — nothing below
-   can be validated without a running production stack.)
-2. **Security hardening pass** — firewall, rate limiting, security-review,
+1. **Electric shape proxy** — application-code change (API route +
+   `shape.ts` update), testable entirely against the existing dev stack
+   with no new infra. Sequenced first because the Cloudflare ingress
+   design in step 2 depends on Electric never being publicly routable —
+   building the ingress before this exists would either break sync or
+   require redoing the ingress config afterward.
+2. **Infrastructure** — Dockerfiles, `docker-compose.prod.yml` (with
+   Electric compose-internal only, per the proxy above), deploy runbook,
+   backups. (Prerequisite for everything below — nothing else can be
+   validated without a running production stack.)
+3. **Security hardening pass** — firewall, rate limiting, security-review,
    cookie flags. (Must happen before real strangers' data lands on the
    box.)
-3. **Sentry** — wired in alongside the security pass since error
+4. **Sentry** — wired in alongside the security pass since error
    visibility from day one of real traffic is valuable; being a SaaS
    dependency with no container, it can be added independently of the
    compose stack's own readiness.
-4. **Landing page** — cheap, no dependencies on the above beyond having a
+5. **Landing page** — cheap, no dependencies on the above beyond having a
    deployed app to link into.
-5. **Playwright E2E** — most valuable once there's a production build to
+6. **Playwright E2E** — most valuable once there's a production build to
    smoke-test against; also serves as the final pre-launch gate.
 
 ## 12. Open Questions for Implementation Time
