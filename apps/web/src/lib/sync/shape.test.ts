@@ -13,6 +13,22 @@ vi.mock("../db/pglite.js", () => ({
   ready: Promise.resolve(),
 }));
 
+// Stubs out the actual network-facing ShapeStream so startSync() can be
+// exercised without ever opening a real connection -- the tests below only
+// assert on the options ShapeStream is constructed with (url/params), not on
+// stream behavior (already covered by the applyChange*/synced-signal tests
+// above via their own synthetic messages).
+vi.mock("@electric-sql/client", async () => {
+  const actual = await vi.importActual<typeof import("@electric-sql/client")>("@electric-sql/client");
+  return {
+    ...actual,
+    ShapeStream: vi.fn().mockImplementation(() => ({
+      subscribe: vi.fn(),
+    })),
+  };
+});
+
+import { ShapeStream } from "@electric-sql/client";
 import {
   applyChangeTo,
   bootstrapInto,
@@ -22,9 +38,11 @@ import {
   onSyncStaleChange,
   STALE_FRESHNESS_TIMEOUT_MS,
   onMirrorChange,
+  startSync,
   __resetSyncedForTests,
   __resetMirrorChangeForTests,
   __resetSyncStaleForTests,
+  __resetStartedForTests,
   __markUpToDateForTests,
   __noteTableFreshForTests,
   __noteTableErroredForTests,
@@ -446,5 +464,46 @@ describe("onMirrorChange", () => {
     await new Promise((resolve) => setTimeout(resolve, 250));
 
     expect(notified).toBe(false);
+  });
+});
+
+// ShapeStream<T> is generic, which makes `vi.mocked(ShapeStream).mock.calls`
+// infer as `never[]` under the mocked constructor signature -- cast through
+// this minimal shape (just the fields these tests inspect) instead of
+// fighting TS's overload resolution on every call site.
+type MockShapeStreamOpts = { url: string; params: Record<string, unknown> };
+
+describe("startSync -> ShapeStream construction", () => {
+  afterEach(() => {
+    vi.mocked(ShapeStream).mockClear();
+    __resetStartedForTests();
+  });
+
+  it("points every tenant-table subscription at the API proxy with householdId as a plain param, never a client-built where clause", () => {
+    startSync("11111111-1111-1111-1111-111111111111");
+
+    const calls = vi.mocked(ShapeStream).mock.calls as unknown as [MockShapeStreamOpts][];
+    const bookCall = calls.find(([opts]) => opts.params.table === "book");
+    expect(bookCall).toBeDefined();
+    const [opts] = bookCall!;
+    expect(opts.url).toBe("/api/sync/shape");
+    expect(opts.params).toMatchObject({
+      table: "book",
+      householdId: "11111111-1111-1111-1111-111111111111",
+      replica: "full",
+    });
+    // The proxy derives the where clause server-side now -- the client must
+    // never construct one itself (that was the security gap being closed).
+    expect(opts.params.where).toBeUndefined();
+  });
+
+  it("subscribes to the global edition table with no householdId param", () => {
+    startSync("11111111-1111-1111-1111-111111111111");
+
+    const calls = vi.mocked(ShapeStream).mock.calls as unknown as [MockShapeStreamOpts][];
+    const editionCall = calls.find(([opts]) => opts.params.table === "edition");
+    expect(editionCall).toBeDefined();
+    const [opts] = editionCall!;
+    expect(opts.params.householdId).toBeUndefined();
   });
 });
