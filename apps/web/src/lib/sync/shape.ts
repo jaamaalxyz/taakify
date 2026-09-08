@@ -18,10 +18,15 @@ import { db, ready } from "../db/pglite.js";
 // "Electric shape proxy") -- the browser never talks to Electric directly.
 // The proxy derives the household filter from the session server-side, so
 // this module no longer needs (or is trusted with) an ELECTRIC_URL at all.
-const SHAPE_PROXY_URL = "/api/sync/shape";
+// Absolute because ShapeStream does `new URL(options.url)` with no base --
+// a relative path throws TypeError: Invalid URL. Same-origin in dev (Vite
+// proxies /api) and in production.
+const SHAPE_PROXY_URL = new URL("/api/sync/shape", window.location.origin).toString();
 
-// Every household-scoped mirror table. Each gets its own shape subscription
-// filtered by household_id. `edition` (global catalog, no household_id) is
+// Every household-scoped mirror table. Each gets its own shape subscription;
+// the household_id filter is now derived server-side by the authenticated
+// proxy (apps/api/src/routes/sync-shape.ts) from the caller's verified
+// membership, not built here. `edition` (global catalog, no household_id) is
 // handled separately below.
 const TENANT_TABLES = [
   "bookcase",
@@ -52,10 +57,10 @@ type Operation = "insert" | "update" | "delete";
  *   order) never regresses a row already updated by a later message.
  * - delete: unconditional hard delete. The mirror doesn't need to preserve
  *   tombstones — for household-scoped tables, soft-deletes stream through
- *   as `update` messages (see `where` clause below, which deliberately does
- *   NOT filter `deleted_at IS NULL`), so a `delete` operation here only
- *   happens for genuinely-gone rows (e.g. shape compaction), not app-level
- *   soft deletes.
+ *   as `update` messages (see the `where` clause built server-side in
+ *   apps/api/src/routes/sync-shape.ts, which deliberately does NOT filter
+ *   `deleted_at IS NULL`), so a `delete` operation here only happens for
+ *   genuinely-gone rows (e.g. shape compaction), not app-level soft deletes.
  *
  * Exported standalone (not just used internally) so unit tests can drive it
  * with synthetic messages, no real ShapeStream/network required. Takes the

@@ -18,10 +18,15 @@ const TENANT_TABLES = new Set([
 ]);
 const ALLOWED_TABLES = new Set([...TENANT_TABLES, "edition"]);
 
-// Electric's own protocol query params (offset/handle/live/cursor), forwarded
-// through unchanged -- see @electric-sql/client's ShapeStream, which appends
-// these on every request as the shape catches up / long-polls for more.
-const ELECTRIC_PROTOCOL_PARAMS = ["offset", "handle", "live", "cursor"];
+// Electric's own protocol query params, forwarded through unchanged -- see
+// @electric-sql/client's ShapeStream, which appends these on every request
+// as the shape catches up / long-polls for more. Derived from
+// @electric-sql/client@1.5.24's actual request params (offset/handle/live/
+// cursor on every request, log on every request, expired_handle during
+// 409 shape-rotation recovery) -- re-check this list on a version bump.
+const ELECTRIC_PROTOCOL_PARAMS = ["offset", "handle", "live", "cursor", "log", "expired_handle"];
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function electricInternalUrl(): string {
   return process.env.ELECTRIC_INTERNAL_URL ?? "http://localhost:3010/v1/shape";
@@ -57,15 +62,18 @@ syncShape.get("/", async (c) => {
   if (TENANT_TABLES.has(table)) {
     const householdId = c.req.query("householdId");
     if (!householdId) return c.json({ error: "householdId is required" }, 400);
+    if (!UUID_RE.test(householdId)) return c.json({ error: "invalid householdId" }, 400);
 
     // RLS's membership_select policy (migrations/0003_rls.sql) already scopes
     // this to households app_user_households() returns for the caller, so a
     // non-member gets zero rows here regardless of what householdId they ask
     // for -- same trust model as bootstrap.ts, but here the result gates
-    // whether we proceed at all rather than just scoping a query.
+    // whether we proceed at all rather than just scoping a query. The
+    // explicit user_id predicate below is cheap defense-in-depth so this
+    // check stays correct even if the RLS policy ever changes.
     const isMember = await withUser(user.id, async (client) => {
       const { rows } = await client.query(
-        `SELECT 1 FROM membership WHERE household_id = $1 AND deleted_at IS NULL LIMIT 1`,
+        `SELECT 1 FROM membership WHERE household_id = $1 AND user_id = current_setting('app.user_id', true) AND deleted_at IS NULL LIMIT 1`,
         [householdId]
       );
       return rows.length > 0;
@@ -76,7 +84,12 @@ syncShape.get("/", async (c) => {
     upstream.searchParams.set("params[1]", householdId);
   }
 
-  const upstreamRes = await fetch(upstream.toString());
+  let upstreamRes: Response;
+  try {
+    upstreamRes = await fetch(upstream.toString(), { signal: c.req.raw.signal });
+  } catch {
+    return c.json({ error: "sync upstream unavailable" }, 502);
+  }
 
   // Forward Electric's response verbatim (status, body, and its
   // electric-* protocol headers the client SDK needs to keep streaming) --
@@ -87,6 +100,17 @@ syncShape.get("/", async (c) => {
     if (["content-encoding", "content-length", "transfer-encoding", "connection"].includes(key)) return;
     headers.set(key, value);
   });
+
+  // Override Electric's own cache/CORS headers: this response is
+  // authenticated and per-household, so a shared cache (CDN, reverse proxy)
+  // must never be authorized to replay it to a different, unauthenticated
+  // requester of the same URL, and the permissive `access-control-allow-
+  // origin: *` Electric sends makes no sense once this endpoint requires a
+  // session cookie.
+  headers.set("cache-control", "private, no-store");
+  headers.delete("access-control-allow-origin");
+  headers.delete("access-control-expose-headers");
+  headers.set("vary", "cookie");
 
   return new Response(upstreamRes.body, { status: upstreamRes.status, headers });
 });

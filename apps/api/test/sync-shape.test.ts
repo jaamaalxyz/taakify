@@ -49,6 +49,16 @@ describe("GET /api/sync/shape", () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
+  it("rejects a malformed (non-UUID) householdId with a clean 400, not an uncaught Postgres error", async () => {
+    const { cookie } = await signUp(app);
+    const res = await app.request("/api/sync/shape?table=book&householdId=not-a-uuid", {
+      headers: { cookie },
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid householdId" });
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
   it("forbids a household the caller is not a member of", async () => {
     const owner = await signUp(app);
     const house = await createHousehold(owner.cookie);
@@ -124,5 +134,57 @@ describe("GET /api/sync/shape", () => {
     // value from the raw query string.
     expect(upstream.searchParams.get("params[1]")).toBe(attackerHouse.id);
     expect(upstream.searchParams.get("params[1]")).not.toBe(house.id);
+  });
+
+  it("forwards log and expired_handle protocol params too", async () => {
+    const { cookie } = await signUp(app);
+    vi.mocked(global.fetch).mockResolvedValue(mockElectricResponse("[]"));
+
+    await app.request("/api/sync/shape?table=edition&offset=-1&log=1&expired_handle=abc", {
+      headers: { cookie },
+    });
+
+    const [calledUrl] = vi.mocked(global.fetch).mock.calls[0];
+    const upstream = new URL(calledUrl as string);
+    expect(upstream.searchParams.get("log")).toBe("1");
+    expect(upstream.searchParams.get("expired_handle")).toBe("abc");
+  });
+
+  it("overrides Electric's cache/CORS headers with private, no-store directives (authenticated per-household response must never be shared-cacheable)", async () => {
+    const { cookie } = await signUp(app);
+    vi.mocked(global.fetch).mockResolvedValue(
+      mockElectricResponse("[]", {
+        "cache-control": "public, s-maxage=60",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "electric-offset, electric-handle",
+      })
+    );
+
+    const res = await app.request("/api/sync/shape?table=edition&offset=-1", { headers: { cookie } });
+
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
+    expect(res.headers.get("access-control-expose-headers")).toBeNull();
+    expect(res.headers.get("vary")).toBe("cookie");
+  });
+
+  it("propagates the request's abort signal to the upstream fetch", async () => {
+    const { cookie } = await signUp(app);
+    vi.mocked(global.fetch).mockResolvedValue(mockElectricResponse("[]"));
+
+    await app.request("/api/sync/shape?table=edition&offset=-1", { headers: { cookie } });
+
+    const [, init] = vi.mocked(global.fetch).mock.calls[0];
+    expect((init as RequestInit).signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("returns a 502 (not an uncaught 500) when the upstream Electric fetch fails", async () => {
+    const { cookie } = await signUp(app);
+    vi.mocked(global.fetch).mockRejectedValue(new TypeError("fetch failed"));
+
+    const res = await app.request("/api/sync/shape?table=edition&offset=-1", { headers: { cookie } });
+
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "sync upstream unavailable" });
   });
 });
