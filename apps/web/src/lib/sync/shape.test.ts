@@ -13,6 +13,22 @@ vi.mock("../db/pglite.js", () => ({
   ready: Promise.resolve(),
 }));
 
+// Stubs out the actual network-facing ShapeStream so startSync() can be
+// exercised without ever opening a real connection -- the tests below only
+// assert on the options ShapeStream is constructed with (url/params), not on
+// stream behavior (already covered by the applyChange*/synced-signal tests
+// above via their own synthetic messages).
+vi.mock("@electric-sql/client", async () => {
+  const actual = await vi.importActual<typeof import("@electric-sql/client")>("@electric-sql/client");
+  return {
+    ...actual,
+    ShapeStream: vi.fn().mockImplementation(() => ({
+      subscribe: vi.fn(),
+    })),
+  };
+});
+
+import { ShapeStream } from "@electric-sql/client";
 import {
   applyChangeTo,
   bootstrapInto,
@@ -22,9 +38,12 @@ import {
   onSyncStaleChange,
   STALE_FRESHNESS_TIMEOUT_MS,
   onMirrorChange,
+  startSync,
   __resetSyncedForTests,
   __resetMirrorChangeForTests,
   __resetSyncStaleForTests,
+  __resetSyncStalledForTests,
+  __resetStartedForTests,
   __markUpToDateForTests,
   __noteTableFreshForTests,
   __noteTableErroredForTests,
@@ -446,5 +465,82 @@ describe("onMirrorChange", () => {
     await new Promise((resolve) => setTimeout(resolve, 250));
 
     expect(notified).toBe(false);
+  });
+});
+
+// ShapeStream<T> is generic, which makes `vi.mocked(ShapeStream).mock.calls`
+// infer as `never[]` under the mocked constructor signature -- cast through
+// this minimal shape (just the fields these tests inspect) instead of
+// fighting TS's overload resolution on every call site.
+type MockShapeStreamOpts = {
+  url: string;
+  params: Record<string, unknown>;
+  fetchClient: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+};
+
+describe("startSync -> ShapeStream construction", () => {
+  afterEach(() => {
+    vi.mocked(ShapeStream).mockClear();
+    __resetStartedForTests();
+    // Each startSync() call above arms the 6s stall watchdog timer -- reset
+    // it so it can't fire during (or leak into) a later test.
+    __resetSyncStalledForTests();
+  });
+
+  it("points every tenant-table subscription at the API proxy with householdId as a plain param, never a client-built where clause", () => {
+    startSync("11111111-1111-1111-1111-111111111111");
+
+    const calls = vi.mocked(ShapeStream).mock.calls as unknown as [MockShapeStreamOpts][];
+    const bookCall = calls.find(([opts]) => opts.params.table === "book");
+    expect(bookCall).toBeDefined();
+    const [opts] = bookCall!;
+    // Critical fix: ShapeStream does `new URL(options.url)` internally with
+    // no base -- a relative "/api/sync/shape" string throws
+    // TypeError: Invalid URL at construction time, permanently breaking
+    // every subscription. Assert the actual URL constructor accepts it
+    // (proving it's absolute), not just a string comparison.
+    expect(() => new URL(opts.url)).not.toThrow();
+    expect(new URL(opts.url).pathname).toBe("/api/sync/shape");
+    expect(opts.params).toMatchObject({
+      table: "book",
+      householdId: "11111111-1111-1111-1111-111111111111",
+      replica: "full",
+    });
+    // The proxy derives the where clause server-side now -- the client must
+    // never construct one itself (that was the security gap being closed).
+    expect(opts.params.where).toBeUndefined();
+    // Electric's client treats `params.params` as the positional-parameter
+    // bag for a `where` clause -- a regression that reintroduced it without
+    // a `where` string would currently pass undetected without this check.
+    expect((opts.params as Record<string, unknown>).params).toBeUndefined();
+  });
+
+  it("subscribes to the global edition table with no householdId param", () => {
+    startSync("11111111-1111-1111-1111-111111111111");
+
+    const calls = vi.mocked(ShapeStream).mock.calls as unknown as [MockShapeStreamOpts][];
+    const editionCall = calls.find(([opts]) => opts.params.table === "edition");
+    expect(editionCall).toBeDefined();
+    const [opts] = editionCall!;
+    expect(opts.params.householdId).toBeUndefined();
+  });
+
+  it("passes a fetchClient that adds credentials: include, so the session cookie reaches the authenticated proxy", async () => {
+    startSync("11111111-1111-1111-1111-111111111111");
+
+    const calls = vi.mocked(ShapeStream).mock.calls as unknown as [MockShapeStreamOpts][];
+    const [opts] = calls[0];
+    expect(opts.fetchClient).toBeInstanceOf(Function);
+
+    const stubbedFetch = vi.fn().mockResolvedValue(new Response("[]"));
+    vi.stubGlobal("fetch", stubbedFetch);
+
+    await opts.fetchClient("https://example.test/api/sync/shape", { method: "GET" });
+
+    expect(stubbedFetch).toHaveBeenCalledTimes(1);
+    const [, init] = stubbedFetch.mock.calls[0];
+    expect(init).toMatchObject({ credentials: "include" });
+
+    vi.unstubAllGlobals();
   });
 });

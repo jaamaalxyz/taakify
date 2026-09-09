@@ -13,13 +13,20 @@ import type { PGliteInterface } from "@electric-sql/pglite";
 import { ShapeStream, isChangeMessage, isControlMessage, type Row } from "@electric-sql/client";
 import { db, ready } from "../db/pglite.js";
 
-// Matches the dev Electric container in docker-compose.dev.yml
-// (ELECTRIC_INSECURE=true, no auth params needed). Overridable for other
-// environments via VITE_ELECTRIC_URL.
-const ELECTRIC_URL = (import.meta.env.VITE_ELECTRIC_URL as string | undefined) ?? "http://localhost:3010/v1/shape";
+// Routed through the API's authenticated Electric shape proxy (see
+// docs/superpowers/specs/2026-09-08-taakify-public-mvp-launch-design.md,
+// "Electric shape proxy") -- the browser never talks to Electric directly.
+// The proxy derives the household filter from the session server-side, so
+// this module no longer needs (or is trusted with) an ELECTRIC_URL at all.
+// Absolute because ShapeStream does `new URL(options.url)` with no base --
+// a relative path throws TypeError: Invalid URL. Same-origin in dev (Vite
+// proxies /api) and in production.
+const SHAPE_PROXY_URL = new URL("/api/sync/shape", window.location.origin).toString();
 
-// Every household-scoped mirror table. Each gets its own shape subscription
-// filtered by household_id. `edition` (global catalog, no household_id) is
+// Every household-scoped mirror table. Each gets its own shape subscription;
+// the household_id filter is now derived server-side by the authenticated
+// proxy (apps/api/src/routes/sync-shape.ts) from the caller's verified
+// membership, not built here. `edition` (global catalog, no household_id) is
 // handled separately below.
 const TENANT_TABLES = [
   "bookcase",
@@ -50,10 +57,10 @@ type Operation = "insert" | "update" | "delete";
  *   order) never regresses a row already updated by a later message.
  * - delete: unconditional hard delete. The mirror doesn't need to preserve
  *   tombstones — for household-scoped tables, soft-deletes stream through
- *   as `update` messages (see `where` clause below, which deliberately does
- *   NOT filter `deleted_at IS NULL`), so a `delete` operation here only
- *   happens for genuinely-gone rows (e.g. shape compaction), not app-level
- *   soft deletes.
+ *   as `update` messages (see the `where` clause built server-side in
+ *   apps/api/src/routes/sync-shape.ts, which deliberately does NOT filter
+ *   `deleted_at IS NULL`), so a `delete` operation here only happens for
+ *   genuinely-gone rows (e.g. shape compaction), not app-level soft deletes.
  *
  * Exported standalone (not just used internally) so unit tests can drive it
  * with synthetic messages, no real ShapeStream/network required. Takes the
@@ -547,15 +554,13 @@ export function startSync(householdId: string): void {
   started = true;
 
   for (const table of TENANT_TABLES) {
-    subscribeTable(table, `household_id = $1`, { "1": householdId });
+    subscribeTable(table, householdId);
   }
   // `edition` is a global catalog table with no household_id column (see
   // CLAUDE.md: "open select/insert/update to any authenticated app-role
-  // connection", no RLS). Every household can already read every edition
-  // row via the API, so mirroring the whole (small) catalog table
-  // unfiltered is consistent with the existing trust model, not a new
-  // leak — there's no per-household `where` clause to filter by.
-  subscribeTable("edition", undefined, undefined);
+  // connection", no RLS) -- no householdId param, matching the proxy's
+  // no-where-clause handling for this table.
+  subscribeTable("edition", undefined);
 
   // Arm the stall watchdog: if `synced` hasn't flipped true by the time this
   // fires, something is genuinely wrong with the shape stream (as opposed
@@ -566,23 +571,22 @@ export function startSync(householdId: string): void {
   }, SYNC_STALL_TIMEOUT_MS);
 }
 
-function subscribeTable(
-  table: TenantTable | "edition",
-  where: string | undefined,
-  params: Record<string, string> | undefined
-): void {
+function subscribeTable(table: TenantTable | "edition", householdId: string | undefined): void {
   const stream = new ShapeStream({
-    url: ELECTRIC_URL,
+    url: SHAPE_PROXY_URL,
     params: {
       table,
-      ...(where ? { where } : {}),
-      ...(params ? { params } : {}),
+      ...(householdId ? { householdId } : {}),
       // Required: without it, `update` messages only carry changed columns
       // + PK (Electric's default "changes only" replica mode), and a
       // full-row upsert would then null out NOT NULL columns that weren't
       // part of the diff. See spike/electric-pglite-spike.ts.
       replica: "full",
     },
+    // The proxy is behind requireUser -- without this, ShapeStream's
+    // internal fetch calls wouldn't carry the session cookie and every
+    // request would 401.
+    fetchClient: (input, init) => fetch(input, { ...init, credentials: "include" }),
   });
 
   stream.subscribe((messages) => {
@@ -607,4 +611,11 @@ function subscribeTable(
     console.error(`[sync] shape stream error for table "${table}"`, error);
     noteTableErrored(table);
   });
+}
+
+// Reset the "startSync already ran" flag — for tests only, so a test can
+// call startSync() more than once (idempotent guard would otherwise no-op
+// every call after the first real one across the whole test file).
+export function __resetStartedForTests(): void {
+  started = false;
 }
