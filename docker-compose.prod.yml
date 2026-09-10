@@ -1,0 +1,169 @@
+# Production stack -- spec docs/superpowers/specs/2026-09-08-taakify-public-mvp-launch-design.md
+# (§3 topology, §4, §5). Key invariants, do not regress them:
+#   * NO service publishes ports. Postgres and Electric are compose-internal
+#     only; web/api are reached by cloudflared over the compose network. The
+#     VM firewall keeps 80/443 closed -- all ingress is the outbound tunnel.
+#   * Electric keeps ELECTRIC_INSECURE=true: it is reachable ONLY from the api
+#     container, and authentication happens in /api/sync/shape (requireUser +
+#     server-derived where clause, PR #32), not in Electric. Exposing Electric
+#     "properly" would require the shape auth work Electric docs gate behind
+#     their cloud offering; the proxy is this repo's chosen boundary.
+#
+# Run with:
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml <cmd>
+#
+# The `tunnel` profile (cloudflared) is separate so the rest of the stack can
+# be brought up and verified before the tunnel exists; `migrate` is a one-shot
+# service that must never run under plain `up`.
+name: taakify-prod
+
+x-api-image: &api-image
+  build:
+    context: .
+    dockerfile: apps/api/Dockerfile
+  image: taakify-api:local
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    # wal_level=logical is required by Electric -- mirrors docker-compose.dev.yml.
+    command: ["postgres", "-c", "wal_level=logical"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}
+      POSTGRES_DB: ${POSTGRES_DB:-taakify}
+    volumes:
+      - taakify_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  electric:
+    # PINNED, never `latest` (issue #28): the shape protocol evolves and
+    # apps/web pins @electric-sql/client@1.5.24 -- bump both together and
+    # re-verify a fresh signup syncs (see docker-compose.dev.yml's comment).
+    image: electricsql/electric:1.7.7
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-taakify}?sslmode=disable
+      ELECTRIC_INSECURE: "true" # safe: compose-internal only, auth is the api proxy
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api:
+    <<: *api-image
+    environment:
+      # Internal topology is fixed here, not in .env.prod -- the env file only
+      # carries secrets. App-role password: migration 0003_rls.sql creates the
+      # taakify_app role with a fixed dev password; parameterizing it is on the
+      # security-pass list (spec §11 step 3). Exposure today: compose network only.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-taakify}
+      APP_DATABASE_URL: postgresql://taakify_app:${APP_DB_PASSWORD:-taakify_app_dev}@postgres:5432/${POSTGRES_DB:-taakify}
+      # The shape proxy's upstream (apps/api/src/routes/sync-shape.ts) --
+      # compose service name, Electric's in-container port.
+      ELECTRIC_INTERNAL_URL: http://electric:3000/v1/shape
+      PORT: "3001"
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env.prod}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:?set BETTER_AUTH_URL in .env.prod}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # Optional R2/S3 object storage; unset = container-local disk (volume
+      # mounted below so covers survive container replacement).
+      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT:-}
+      STORAGE_BUCKET: ${STORAGE_BUCKET:-}
+      STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-}
+      STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:-}
+      STORAGE_REGION: ${STORAGE_REGION:-auto}
+      STORAGE_PUBLIC_BASE_URL: ${STORAGE_PUBLIC_BASE_URL:-}
+      # Unused by app code until the Sentry step (spec §11 step 4); harmless to set now.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    volumes:
+      # fs-storage fallback root (apps/api cwd in the container) -- no-op when
+      # STORAGE_ENDPOINT/BUCKET are set.
+      - taakify_storage:/app/apps/api/.storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      electric:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: taakify-web:local
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # One-shot: docker compose --env-file .env.prod -f docker-compose.prod.yml
+  # run --rm migrate   (NOT `up --exit-code-from` -- that implies
+  # --abort-on-container-exit and tears the whole stack down when the
+  # migration finishes.)
+  migrate:
+    <<: *api-image
+    command: ["pnpm", "--filter", "@taakify/api", "migrate"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-taakify}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["migrate"]
+    restart: "no"
+
+  # Sole ingress. Ingress rules (hostname -> service) live in the Cloudflare
+  # dashboard for token-managed tunnels -- see docs/deploy.md. The token never
+  # needs to reach any other container.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: ["tunnel", "--no-autoupdate", "run", "--token", "${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env.prod}"]
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_started
+    restart: unless-stopped
+    profiles: ["tunnel"]
+
+  # Nightly pg_dump -> rotate -> rclone off-VM; alerts Sentry on failure
+  # (spec §9). Runs unconditionally (no profile): forgetting backups must be
+  # impossible by construction.
+  backup:
+    build:
+      context: ./infra/backup
+    image: taakify-backup:local
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-taakify}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      # Set RCLONE_REMOTE (e.g. "r2:taakify-backups") + the RCLONE_CONFIG_R2_*
+      # vars in .env.prod to push dumps off the VM -- see .env.prod.example.
+      RCLONE_REMOTE: ${RCLONE_REMOTE:-}
+      RCLONE_CONFIG_R2_TYPE: ${RCLONE_CONFIG_R2_TYPE:-}
+      RCLONE_CONFIG_R2_ENDPOINT: ${RCLONE_CONFIG_R2_ENDPOINT:-}
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${RCLONE_CONFIG_R2_ACCESS_KEY_ID:-}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${RCLONE_CONFIG_R2_SECRET_ACCESS_KEY:-}
+      RCLONE_CONFIG_R2_REGION: ${RCLONE_CONFIG_R2_REGION:-auto}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    volumes:
+      - taakify_backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  taakify_pgdata:
+  taakify_backups:
+  taakify_storage:
