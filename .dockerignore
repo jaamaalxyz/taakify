@@ -1,0 +1,16 @@
+# Both production images build from the repo root (pnpm workspace), so this
+# file is shared by apps/api/Dockerfile and apps/web/Dockerfile.
+.git
+node_modules
+**/node_modules
+**/.env
+**/.env.*
+!**/.env.example
+**/dist
+**/.storage
+.worktrees
+.claude
+.zcode
+spike
+docs
+*.md
