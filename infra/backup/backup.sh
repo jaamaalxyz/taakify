@@ -5,6 +5,10 @@
 set -u
 
 RETENTION="${BACKUP_RETENTION_DAYS:-14}"
+if [ "$RETENTION" -lt 1 ] 2>/dev/null; then
+  echo "[$(date -u +%FT%TZ)] WARNING: BACKUP_RETENTION_DAYS=${RETENTION} is invalid, forcing to 1 (always keep the latest backup)" >&2
+  RETENTION=1
+fi
 BACKUP_DIR="${BACKUP_DIR:-/backups}"
 INTERVAL_SECONDS=$(( 24 * 60 * 60 ))
 
