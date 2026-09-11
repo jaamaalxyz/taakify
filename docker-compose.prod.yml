@@ -119,6 +119,7 @@ services:
     command: ["pnpm", "--filter", "@taakify/api", "migrate"]
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-taakify}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env.prod}
     depends_on:
       postgres:
         condition: service_healthy
