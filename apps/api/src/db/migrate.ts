@@ -6,7 +6,10 @@ import "dotenv/config";
 
 const MIGRATIONS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../migrations");
 
-export async function migrate(databaseUrl: string): Promise<string[]> {
+export async function migrate(
+  databaseUrl: string,
+  options?: { appDbPassword?: string }
+): Promise<string[]> {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const applied: string[] = [];
   try {
@@ -32,6 +35,25 @@ export async function migrate(databaseUrl: string): Promise<string[]> {
         client.release();
       }
     }
+
+    // Runs on every invocation (not just when 0003_rls.sql is newly applied)
+    // so that re-running `pnpm migrate` after rotating APP_DB_PASSWORD picks
+    // up the new value. migrations/0003_rls.sql still bootstraps the role
+    // with a hardcoded dev password on first-ever creation (CREATE ROLE ...
+    // IF NOT EXISTS) -- this always overrides it via quote-escaped ALTER ROLE
+    // (Postgres's DDL grammar doesn't accept a bind parameter in PASSWORD's clause;
+    // the value is single-quote-doubled before interpolation, safe here since it
+    // only ever comes from an operator-set env var, never user input).
+    const { rowCount: roleExists } = await pool.query(
+      "SELECT 1 FROM pg_roles WHERE rolname = 'taakify_app'"
+    );
+    if (roleExists) {
+      const appDbPassword = options?.appDbPassword?.length
+        ? options.appDbPassword
+        : "taakify_app_dev";
+      const escapedPassword = appDbPassword.replace(/'/g, "''");
+      await pool.query(`ALTER ROLE taakify_app WITH PASSWORD '${escapedPassword}'`);
+    }
   } finally {
     await pool.end();
   }
@@ -43,7 +65,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error("DATABASE_URL is not set");
     process.exit(1);
   }
-  migrate(process.env.DATABASE_URL)
+  migrate(process.env.DATABASE_URL, { appDbPassword: process.env.APP_DB_PASSWORD })
     .then((applied) => {
       console.log(applied.length ? `Applied: ${applied.join(", ")}` : "Up to date");
     })

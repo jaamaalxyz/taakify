@@ -15,8 +15,11 @@ COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
 
-# tsx is a devDependency and IS required at runtime here.
-RUN pnpm install --frozen-lockfile --filter @taakify/api...
+# Prod-only install: the runtime image carries just the api + shared
+# dependency closures (tsx lives in dependencies -- it IS the runtime, see
+# the plan's "Resolved open question"). Test tooling stays out via --prod
+# plus the workspace's autoInstallPeers=false (see pnpm-workspace.yaml).
+RUN pnpm install --frozen-lockfile --filter @taakify/api... --prod
 
 COPY apps/api apps/api
 COPY packages/shared packages/shared

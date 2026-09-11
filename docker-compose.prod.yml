@@ -58,9 +58,11 @@ services:
     <<: *api-image
     environment:
       # Internal topology is fixed here, not in .env.prod -- the env file only
-      # carries secrets. App-role password: migration 0003_rls.sql creates the
-      # taakify_app role with a fixed dev password; parameterizing it is on the
-      # security-pass list (spec §11 step 3). Exposure today: compose network only.
+      # carries secrets. App-role password: apps/api/src/db/migrate.ts sets it
+      # from APP_DB_PASSWORD via quote-escaped ALTER ROLE on every migrate run
+      # (Postgres's DDL grammar doesn't accept a bind parameter in PASSWORD's
+      # clause; see migrations/0003_rls.sql's comment) -- set APP_DB_PASSWORD
+      # below to a real secret before the first production migrate.
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-taakify}
       APP_DATABASE_URL: postgresql://taakify_app:${APP_DB_PASSWORD:-taakify_app_dev}@postgres:5432/${POSTGRES_DB:-taakify}
       # The shape proxy's upstream (apps/api/src/routes/sync-shape.ts) --
@@ -117,6 +119,7 @@ services:
     command: ["pnpm", "--filter", "@taakify/api", "migrate"]
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-taakify}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env.prod}
     depends_on:
       postgres:
         condition: service_healthy
