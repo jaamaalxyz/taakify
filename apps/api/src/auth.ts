@@ -23,4 +23,11 @@ export const auth = betterAuth({
       }
     : undefined,
   trustedOrigins: ["http://localhost:5173"],
+  // Spelled out rather than left to better-auth's own `isProduction` default
+  // so the production behavior is visible here, not buried in a library
+  // default: /sign-in* and /sign-up* are capped at 3 requests per 10s by
+  // better-auth's built-in special rules once enabled (see
+  // apps/api/test/auth-hardening.test.ts). Off in dev/test (NODE_ENV unset)
+  // so the test suite's many rapid signUp() calls aren't throttled.
+  rateLimit: { enabled: process.env.NODE_ENV === "production" },
 });
