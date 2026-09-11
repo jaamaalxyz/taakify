@@ -18,7 +18,7 @@ export async function signUpAndOnboard(page: Page): Promise<SignedUpUser> {
   await page.getByLabel("Your name").fill("E2E Tester");
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill("password-123456");
-  await page.getRole("button", { name: "Sign up" }).click();
+  await page.getByRole("button", { name: "Sign up" }).click();
 
   await expect(page.getByRole("heading", { name: "Name your library" })).toBeVisible();
   await page.getByLabel("Library name").fill(householdName);
