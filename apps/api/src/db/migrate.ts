@@ -40,8 +40,10 @@ export async function migrate(
     // so that re-running `pnpm migrate` after rotating APP_DB_PASSWORD picks
     // up the new value. migrations/0003_rls.sql still bootstraps the role
     // with a hardcoded dev password on first-ever creation (CREATE ROLE ...
-    // IF NOT EXISTS) -- this always overrides it with the real one right
-    // after, via a parameterized query so the password is never SQL-literal.
+    // IF NOT EXISTS) -- this always overrides it via quote-escaped ALTER ROLE
+    // (Postgres's DDL grammar doesn't accept a bind parameter in PASSWORD's clause;
+    // the value is single-quote-doubled before interpolation, safe here since it
+    // only ever comes from an operator-set env var, never user input).
     const { rowCount: roleExists } = await pool.query(
       "SELECT 1 FROM pg_roles WHERE rolname = 'taakify_app'"
     );

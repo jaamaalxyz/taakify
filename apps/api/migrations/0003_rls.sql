@@ -2,10 +2,12 @@
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'taakify_app') THEN
     -- Bootstrap-only password, immediately overridden: apps/api/src/db/migrate.ts
-    -- runs a parameterized ALTER ROLE right after every migration pass, using
+    -- runs a quote-escaped ALTER ROLE right after every migration pass, using
     -- APP_DB_PASSWORD (falling back to this same dev value when unset, so
-    -- docker-compose.dev.yml and the test suite are unaffected). The real
-    -- password never appears as a SQL literal outside this dev fallback.
+    -- docker-compose.dev.yml and the test suite are unaffected). Postgres's DDL
+    -- grammar doesn't accept a bind parameter in PASSWORD's clause; the value is
+    -- single-quote-doubled before interpolation (safe here since it only ever
+    -- comes from an operator-set env var, never user input).
     CREATE ROLE taakify_app LOGIN PASSWORD 'taakify_app_dev';
   END IF;
 END $$;
