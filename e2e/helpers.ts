@@ -24,7 +24,14 @@ export async function signUpAndOnboard(page: Page): Promise<SignedUpUser> {
   await page.getByLabel("Library name").fill(householdName);
   await page.getByRole("button", { name: "Create library" }).click();
 
-  await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
+  // AppShell's SyncGate (components/AppShell.tsx) holds the Home screen
+  // behind a loading skeleton until the Electric shape stream reaches
+  // "synced" or its own SYNC_STALL_TIMEOUT_MS (6s) fallback fires -- a brand
+  // new household has no existing local mirror data to release the gate
+  // early. Playwright's default 5s assertion timeout is shorter than that
+  // 6s worst case, so this needs its own longer timeout or this step flakes
+  // on a real (non-mocked) sync round-trip.
+  await expect(page.getByRole("heading", { name: "Home" })).toBeVisible({ timeout: 10_000 });
 
   // page.request shares the browser context's session cookie, so this is
   // an authenticated call as the just-created user -- the household id
