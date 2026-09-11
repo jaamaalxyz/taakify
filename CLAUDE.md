@@ -44,6 +44,7 @@ pnpm test                                   # from root, runs both @taakify/api 
 pnpm --filter @taakify/api test -- households.test.ts   # single api file
 pnpm --filter @taakify/api test -- -t "some test name"  # single api test by name
 pnpm --filter @taakify/web test -- SignIn.test.tsx      # single web file
+pnpm test:e2e                               # Playwright E2E suite (needs docker compose + pnpm migrate + dev:api/dev:web already runnable)
 ```
 
 API tests run against a real Postgres (`taakify_test` db on the same :5433
