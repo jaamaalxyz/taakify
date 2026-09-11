@@ -31,7 +31,7 @@ describe("auth hardening", () => {
     expect(res.status).toBe(200);
 
     const setCookie = res.headers.getSetCookie().join("; ");
-    expect(setCookie).toMatch(/secure/i);
+    expect(setCookie).toMatch(/;\s*Secure\b/i);
     expect(setCookie).toMatch(/samesite=lax/i);
   });
 

@@ -30,4 +30,15 @@ export const auth = betterAuth({
   // apps/api/test/auth-hardening.test.ts). Off in dev/test (NODE_ENV unset)
   // so the test suite's many rapid signUp() calls aren't throttled.
   rateLimit: { enabled: process.env.NODE_ENV === "production" },
+  advanced: {
+    // Production topology (docs/deploy.md) is Cloudflare edge -> outbound
+    // cloudflared tunnel -> this container, with no ports published
+    // directly to the internet. Cloudflare's edge reliably sets
+    // cf-connecting-ip to a single trustworthy client IP in that topology,
+    // so prefer it over x-forwarded-for (better-auth's default), whose
+    // value depends on how many hops it passes through and may not
+    // reliably resolve to exactly one IP -- if it doesn't, better-auth
+    // falls back to one shared rate-limit bucket for every client.
+    ipAddress: { ipAddressHeaders: ["cf-connecting-ip", "x-forwarded-for"] },
+  },
 });

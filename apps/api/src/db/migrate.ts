@@ -48,7 +48,9 @@ export async function migrate(
       "SELECT 1 FROM pg_roles WHERE rolname = 'taakify_app'"
     );
     if (roleExists) {
-      const appDbPassword = options?.appDbPassword ?? "taakify_app_dev";
+      const appDbPassword = options?.appDbPassword?.length
+        ? options.appDbPassword
+        : "taakify_app_dev";
       const escapedPassword = appDbPassword.replace(/'/g, "''");
       await pool.query(`ALTER ROLE taakify_app WITH PASSWORD '${escapedPassword}'`);
     }

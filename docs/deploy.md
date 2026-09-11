@@ -28,8 +28,9 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml <cmd>
 
 ```sh
 cp .env.prod.example .env.prod
-# fill in POSTGRES_PASSWORD, BETTER_AUTH_SECRET, BETTER_AUTH_URL,
-# CLOUDFLARE_TUNNEL_TOKEN (after step 6), and optionally STORAGE_*/SENTRY_DSN
+# fill in POSTGRES_PASSWORD, APP_DB_PASSWORD, BETTER_AUTH_SECRET,
+# BETTER_AUTH_URL, CLOUDFLARE_TUNNEL_TOKEN (after step 6), and optionally
+# STORAGE_*/SENTRY_DSN
 ```
 
 `.env.prod` is gitignored. Internal topology (service hostnames, DB URLs,
@@ -40,7 +41,19 @@ carries secrets only.
 by `pnpm migrate` via `ALTER ROLE`, not baked into the migration SQL) — set
 it to a real secret, distinct from `POSTGRES_PASSWORD`. To rotate it later:
 update `.env.prod`, then re-run step 4 (`... run --rm migrate`) — the next
-migrate pass applies the new password immediately.
+migrate pass applies the new password immediately — and then recreate the
+`api` container so it picks up the new value:
+
+```sh
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --force-recreate api
+```
+
+This step is not optional: `api`'s `APP_DATABASE_URL` is resolved once, at
+container start, so a running `api` container keeps using the old password
+until recreated, and every tenant-data request will start failing with a
+Postgres auth error. `/api/health` does **not** check DB connectivity (it's
+a static handler), so a stale `api` container after a rotation will keep
+reporting healthy while the app is actually broken.
 
 ## 3. Build and start the data tier
 
@@ -156,3 +169,9 @@ follows the image it was started with — recreate it after image bumps:
   — better-auth's tables come from the migration set.
 - Container crash-looping → `docker compose ... ps` shows `Restarting`;
   `logs <service>` for the reason; `restart: unless-stopped` keeps trying.
+- Rate limiting seems to block *all* users, not just one abusive client →
+  check `logs api` for better-auth's warning that it couldn't determine a
+  trusted client IP. That's the signal this deployment's proxy chain
+  (Cloudflare edge → tunnel → `api`) isn't resolving to a single trustworthy
+  IP per request — e.g. Cloudflare Tunnel changing its proxy headers — and
+  every request is collapsing into one shared rate-limit bucket.
