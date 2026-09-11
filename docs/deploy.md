@@ -36,10 +36,11 @@ cp .env.prod.example .env.prod
 `ELECTRIC_INTERNAL_URL`) lives in `docker-compose.prod.yml` — the env file
 carries secrets only.
 
-Known caveat: the RLS-scoped `taakify_app` role's password is hardcoded in
-migration `0003_rls.sql` (a dev-ism). It is only reachable inside the compose
-network (Postgres publishes no ports), and parameterizing it is on the
-security-pass list (spec §11 step 3).
+`APP_DB_PASSWORD` sets the RLS-scoped `taakify_app` role's password (applied
+by `pnpm migrate` via `ALTER ROLE`, not baked into the migration SQL) — set
+it to a real secret, distinct from `POSTGRES_PASSWORD`. To rotate it later:
+update `.env.prod`, then re-run step 4 (`... run --rm migrate`) — the next
+migrate pass applies the new password immediately.
 
 ## 3. Build and start the data tier
 
