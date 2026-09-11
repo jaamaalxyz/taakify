@@ -1,9 +1,10 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { authClient } from "./lib/auth.js";
 import { SignUp } from "./pages/SignUp.js";
 import { SignIn } from "./pages/SignIn.js";
 import { Onboarding } from "./pages/Onboarding.js";
 import { InviteAccept } from "./pages/InviteAccept.js";
+import { Landing } from "./pages/Landing.js";
 import { Home } from "./pages/Home.js";
 import { Library } from "./pages/Library.js";
 import { Add } from "./pages/Add.js";
@@ -19,6 +20,7 @@ import { useTheme } from "./lib/use-theme.js";
 export function App() {
   useTheme();
   const { data: session, isPending } = authClient.useSession();
+  const location = useLocation();
 
   if (isPending)
     return (
@@ -28,6 +30,9 @@ export function App() {
     );
 
   const authed = Boolean(session);
+  // Only the root path gets the landing page when unauthenticated; every
+  // other authed-only route keeps bouncing to /signin as before.
+  const unauthedRootElement = location.pathname === "/" ? <Landing /> : <Navigate to="/signin" />;
 
   return (
     <Routes>
@@ -40,9 +45,10 @@ export function App() {
         redirecting to /onboarding when the user has no household yet (see
         lib/household-context.tsx). Only routes for pages that exist land
         here — / (Home), /library, /library/:bookId, /add, /import, /loans,
-        /bookcases, and /profile.
+        /bookcases, and /profile. When unauthenticated, / shows Landing
+        (spec §6); every other path here still bounces to /signin.
       */}
-      <Route element={authed ? <AppShell /> : <Navigate to="/signin" />}>
+      <Route element={authed ? <AppShell /> : unauthedRootElement}>
         <Route path="/" element={<Home />} />
         <Route path="/library" element={<Library />} />
         <Route path="/library/:bookId" element={<BookDetail />} />

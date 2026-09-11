@@ -93,9 +93,17 @@ beforeEach(() => {
 });
 
 describe("App routing", () => {
-  it("redirects unauthenticated users from / to /signin", () => {
+  it("shows the landing page for unauthenticated visitors at /", () => {
     vi.mocked(authClient.useSession).mockReturnValue({ data: null, isPending: false } as never);
     renderApp("/");
+    expect(screen.getByRole("heading", { name: "Taakify" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Sign up" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Sign in" })).toBeInTheDocument();
+  });
+
+  it("still redirects unauthenticated users from /library to /signin", () => {
+    vi.mocked(authClient.useSession).mockReturnValue({ data: null, isPending: false } as never);
+    renderApp("/library");
     expect(screen.getByRole("heading", { name: "Sign in to Taakify" })).toBeInTheDocument();
   });
 
