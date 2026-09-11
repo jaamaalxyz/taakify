@@ -4,6 +4,29 @@ packages:
 allowBuilds:
   esbuild: true
 
+# Do not auto-install peer dependencies: better-auth declares a long list of
+# optional peers (react, vitest, pg, ...) for every adapter it supports, and
+# pnpm's default auto-install resolves the unsatisfied ones -- dragging the
+# whole vitest/vite/postcss tree into the api's prod-only Docker install.
+# Everything actually needed is declared explicitly (react in web, pg in api).
+# dedupe-peer-dependents stays off for the same reason: with it on, pnpm
+# collapses better-auth into one workspace-wide variant -- the one with
+# web's react/vitest peers attached -- and the api inherits that fat variant.
+autoInstallPeers: false
+dedupePeerDependents: false
+
+# Force transitive build-time packages past known advisories so the standing
+# `pnpm audit` step (docs/deploy.md) stays quiet for anything resolvable
+# without a major bump: nanoid/postcss enter the graph only through
+# vite/tailwind/vitest chains, never the shipped runtime images.
+# nanoid resolves to 6.x (not 3.3.18+) because minimumReleaseAge blocks the
+# day-old patched 3.x releases; that is safe here -- postcss is nanoid's only
+# consumer in this graph, verified by build+tests, and Node >=24 can require
+# ESM-only packages. Capped at <7 so a future major can't slip in silently.
+overrides:
+  nanoid: ">=3.3.18 <7"
+  postcss: ">=8.5.23"
+
 # Supply-chain hardening: refuse to install a package version until it has
 # been publicly available for at least a week. A malicious or compromised
 # publish is usually caught and unpublished/deprecated within days; this
