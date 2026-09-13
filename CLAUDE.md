@@ -33,8 +33,8 @@ pnpm migrate
 Run:
 
 ```
-pnpm dev:api    # :3001
-pnpm dev:web    # :5173 (proxies /api -> :3001)
+pnpm dev:api    # :3011
+pnpm dev:web    # :5173 (proxies /api -> :3011)
 ```
 
 Test:
@@ -44,8 +44,13 @@ pnpm test                                   # from root, runs both @taakify/api 
 pnpm --filter @taakify/api test -- households.test.ts   # single api file
 pnpm --filter @taakify/api test -- -t "some test name"  # single api test by name
 pnpm --filter @taakify/web test -- SignIn.test.tsx      # single web file
-pnpm test:e2e                               # Playwright E2E suite (needs docker compose + pnpm migrate + dev:api/dev:web already runnable)
+pnpm test:e2e                               # Playwright E2E suite (needs docker compose + pnpm migrate + dev:api/dev:web already runnable; one-time setup: pnpm exec playwright install chromium)
+pnpm test:e2e e2e/home.spec.ts              # single E2E spec file
 ```
+
+The E2E suite runs serially (`workers: 1` in playwright.config.ts, chosen for
+reliability over a single non-scaled dev stack rather than speed) and takes
+several minutes end-to-end.
 
 API tests run against a real Postgres (`taakify_test` db on the same :5433
 instance, dropped/recreated and migrated fresh via `test/global-setup.ts`).

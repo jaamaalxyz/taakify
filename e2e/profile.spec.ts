@@ -3,13 +3,6 @@ import { test, expect } from "@playwright/test";
 import { signUpAndOnboard } from "./helpers.js";
 
 test("Profile: creating an invite shows a shareable link", async ({ page }) => {
-  // One full-page navigation via signUpAndOnboard's internal /signup plus
-  // this test's own /profile goto, each re-establishing several Electric shape
-  // long-polls plus module fetches, plus the real API round-trip to create the
-  // invite -- all under this dev environment's ~6-concurrent-connection-per-origin
-  // limit. See Task 3's home.spec.ts for the same pattern and rationale.
-  test.setTimeout(60_000);
-
   await signUpAndOnboard(page);
 
   await page.goto("/profile");

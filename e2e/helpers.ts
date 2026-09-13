@@ -37,7 +37,9 @@ export async function signUpAndOnboard(page: Page): Promise<SignedUpUser> {
   // an authenticated call as the just-created user -- the household id
   // isn't otherwise exposed in the URL or DOM after onboarding.
   const me = await page.request.get("/api/me");
+  expect(me.ok()).toBeTruthy();
   const body = await me.json();
+  expect(body.memberships.length).toBeGreaterThan(0);
   const householdId = body.memberships[0].household_id as string;
 
   return { email, householdId };
@@ -54,5 +56,10 @@ export async function addBookManually(page: Page, title: string): Promise<void> 
   await page.getByRole("tab", { name: "Manual" }).click();
   await page.getByLabel("Title").fill(title);
   await page.getByRole("button", { name: "Add book" }).click();
-  await expect(page.getByText(`Added "${title}"`)).toBeVisible();
+  // This toast (sonner, no custom duration set -- see
+  // apps/web/src/components/ui/sonner.tsx) auto-dismisses after ~4s. A longer
+  // timeout here helps against a merely-late render, but cannot rescue a
+  // toast that already unmounted during a real stall -- the config's
+  // `workers: 1` is what actually prevents that stall from happening.
+  await expect(page.getByText(`Added "${title}"`)).toBeVisible({ timeout: 15_000 });
 }

@@ -3,12 +3,6 @@ import { test, expect } from "@playwright/test";
 import { signUpAndOnboard, addBookManually } from "./helpers.js";
 
 test("Loans: lending a book makes it appear under Active", async ({ page }) => {
-  // Three full-page navigations (signup -> add -> loans), each re-establishing
-  // several Electric shape long-polls plus module fetches under this dev
-  // environment's ~6-concurrent-connection-per-origin limit -- see Task 3's
-  // home.spec.ts for the same pattern and rationale.
-  test.setTimeout(60_000);
-
   await signUpAndOnboard(page);
 
   const title = `E2E Loan Book ${randomUUID().slice(0, 8)}`;
