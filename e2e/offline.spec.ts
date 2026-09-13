@@ -109,10 +109,16 @@ test("Offline: a book added while offline syncs to the server once back online",
     .poll(
       async () => {
         const res = await page.request.get(`/api/books?householdId=${householdId}`);
-        // Same guard as the before-online check above: fail the poll with a
-        // clear message on an error response instead of a TypeError from
-        // reading .books off an error body.
-        expect(res.ok()).toBeTruthy();
+        // Deliberately NOT expect(res.ok()).toBeTruthy() here: expect.poll's
+        // callback does not retry past a thrown error -- it aborts the poll
+        // immediately on the first exception (verified directly: a
+        // throwing callback fails on attempt 1, never reaches attempt 3).
+        // A transient non-2xx during this test's own reconnection window is
+        // exactly the kind of thing this poll exists to tolerate, so treat
+        // it the same as "not synced yet" and let the poll keep retrying;
+        // a genuine, persistent failure still times out and fails below,
+        // just without a more specific message about the non-ok response.
+        if (!res.ok()) return false;
         const body = await res.json();
         return body.books.some((b: { edition: { title: string } }) => b.edition.title === title);
       },
