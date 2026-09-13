@@ -16,7 +16,7 @@ export default defineConfig({
   workers: 1,
   // Generous per-test budget so individual specs don't each need their own
   // test.setTimeout() override -- see e2e/offline.spec.ts's own
-  // test.setTimeout(120_000) for the one case that's still genuinely
+  // test.setTimeout(150_000) for the one case that's still genuinely
   // different (that spec's own comment explains why).
   timeout: 90_000,
   // test.setTimeout() does not affect assertion timeouts. The default 5s is

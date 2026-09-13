@@ -57,12 +57,16 @@ test("Offline: a book added while offline syncs to the server once back online",
 
   // Confirm the write has NOT reached the server yet -- this is what makes
   // the later assertion meaningful, rather than trivially true regardless
-  // of whether the outbox ever flushes.
+  // of whether the outbox ever flushes. Guarded like signUpAndOnboard's
+  // /api/me call in helpers.ts: without the ok() check, an error response
+  // body (e.g. a transient auth failure) would make the .some() below throw
+  // a bare TypeError instead of a clear assertion failure.
   const beforeOnline = await page.request.get(`/api/books?householdId=${householdId}`);
+  expect(beforeOnline.ok()).toBeTruthy();
   const beforeBody = await beforeOnline.json();
-  expect(beforeBody.books.some((b: { edition: { title: string } }) => b.edition.title === title)).toBe(
-    false
-  );
+  expect(
+    beforeBody.books.some((b: { edition: { title: string } }) => b.edition.title === title)
+  ).toBe(false);
 
   await context.setOffline(false);
 
@@ -105,6 +109,10 @@ test("Offline: a book added while offline syncs to the server once back online",
     .poll(
       async () => {
         const res = await page.request.get(`/api/books?householdId=${householdId}`);
+        // Same guard as the before-online check above: fail the poll with a
+        // clear message on an error response instead of a TypeError from
+        // reading .books off an error body.
+        expect(res.ok()).toBeTruthy();
         const body = await res.json();
         return body.books.some((b: { edition: { title: string } }) => b.edition.title === title);
       },
