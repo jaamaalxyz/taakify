@@ -12,8 +12,12 @@ test("Offline: a book added while offline syncs to the server once back online",
   // limit -- see Task 3's home.spec.ts for the same pattern and rationale.
   // Also see the timeout note below the final expect.poll: this spec's own
   // shape (a write made while offline, then coming back online) reliably
-  // needs much more headroom than that alone would suggest.
-  test.setTimeout(120_000);
+  // needs much more headroom than that alone would suggest. Raised to
+  // 150s (from 120s) alongside the poll timeout bump below (60s -> 90s) so
+  // the overall test budget comfortably exceeds the poll's new worst case
+  // plus the test's other real work (navigation, offline-badge-clear
+  // wait, etc.).
+  test.setTimeout(150_000);
 
   const { householdId } = await signUpAndOnboard(page);
   const title = `E2E Offline Book ${randomUUID().slice(0, 8)}`;
@@ -88,10 +92,15 @@ test("Offline: a book added while offline syncs to the server once back online",
   // the underlying fetch that stalls) -- and this dev environment's
   // HTTP/1.1 ~6-connection-per-origin limit (shared with several
   // concurrently-reconnecting Electric shape streams) plausibly compounds
-  // it. 60s comfortably covers the two-hang case seen during
-  // investigation without approaching outbox.ts's own dead-letter point
-  // (5 exhausted attempts) -- a genuine regression (the row never sending)
-  // would still fail this.
+  // it. A follow-up full-suite run showed this quirk reproducing worse
+  // than the "occasional" framing above assumed (offline.spec.ts failed 3
+  // of 4 runs at exactly this check, at the old 60s budget) -- so the
+  // worst case to plan for is 4 consecutive hung attempts, not 2: 4 x 15s
+  // (FLUSH_FETCH_TIMEOUT_MS) = 60s, plus the BACKOFF_SCHEDULE_MS delays
+  // before attempts 2/3/4 (1s + 2s + 5s = 8s), totaling ~68s. 90s rounds
+  // that up to a clean, comfortably generous value without approaching
+  // outbox.ts's own dead-letter point (5 exhausted attempts) -- a genuine
+  // regression (the row never sending) would still fail this.
   await expect
     .poll(
       async () => {
@@ -99,7 +108,7 @@ test("Offline: a book added while offline syncs to the server once back online",
         const body = await res.json();
         return body.books.some((b: { edition: { title: string } }) => b.edition.title === title);
       },
-      { timeout: 60_000 }
+      { timeout: 90_000 }
     )
     .toBe(true);
 });
