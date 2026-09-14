@@ -6,6 +6,7 @@ import { Profile } from "./Profile.js";
 import { api } from "../lib/api.js";
 import { listBooks } from "../lib/repo/books.js";
 import { useHousehold } from "../lib/household-context.js";
+import { authClient } from "../lib/auth.js";
 import { toast } from "sonner";
 
 // Invites (/api/households/:id/invites) deliberately stay on api() — invite/
@@ -17,6 +18,16 @@ vi.mock("../lib/api.js", async (importOriginal) => {
 });
 vi.mock("../lib/repo/books.js", () => ({ listBooks: vi.fn() }));
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
+vi.mock("../lib/auth.js", () => ({
+  authClient: {
+    emailOtp: {
+      sendVerificationOtp: vi.fn(),
+      requestEmailChange: vi.fn(),
+      changeEmail: vi.fn(),
+    },
+    updateUser: vi.fn(),
+  },
+}));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
 const household = { id: "h1", name: "Family Library", role: "owner" };
@@ -121,5 +132,63 @@ describe("Profile", () => {
     );
     expect(await screen.findByDisplayValue(`${location.origin}/invite/tok123`)).toBeInTheDocument();
     expect(toast).toHaveBeenCalledWith("Invite created");
+  });
+});
+
+describe("Profile account settings", () => {
+  beforeEach(() => {
+    mockApi();
+  });
+
+  it("changes the display name", async () => {
+    const user = userEvent.setup();
+    vi.mocked(authClient.updateUser).mockResolvedValue({ error: null } as never);
+    renderProfile();
+
+    await user.click(screen.getByRole("button", { name: "Edit name" }));
+    const nameInput = screen.getByLabelText("Name");
+    await user.clear(nameInput);
+    await user.type(nameInput, "Grace Hopper");
+    await user.click(screen.getByRole("button", { name: "Save name" }));
+
+    await waitFor(() =>
+      expect(authClient.updateUser).toHaveBeenCalledWith({ name: "Grace Hopper" })
+    );
+  });
+
+  it("walks through the three-step email change", async () => {
+    const user = userEvent.setup();
+    vi.mocked(authClient.emailOtp.sendVerificationOtp).mockResolvedValue({ error: null } as never);
+    vi.mocked(authClient.emailOtp.requestEmailChange).mockResolvedValue({ error: null } as never);
+    vi.mocked(authClient.emailOtp.changeEmail).mockResolvedValue({ error: null } as never);
+    renderProfile();
+
+    await user.click(screen.getByRole("button", { name: "Change email" }));
+    await user.click(screen.getByRole("button", { name: "Send code to current email" }));
+    await waitFor(() =>
+      expect(authClient.emailOtp.sendVerificationOtp).toHaveBeenCalledWith({
+        email: expect.any(String),
+        type: "email-verification",
+      })
+    );
+
+    await user.type(screen.getByLabelText("Code sent to your current email"), "111111");
+    await user.type(screen.getByLabelText("New email"), "new@example.com");
+    await user.click(screen.getByRole("button", { name: "Send code to new email" }));
+    await waitFor(() =>
+      expect(authClient.emailOtp.requestEmailChange).toHaveBeenCalledWith({
+        newEmail: "new@example.com",
+        otp: "111111",
+      })
+    );
+
+    await user.type(screen.getByLabelText("Code sent to your new email"), "222222");
+    await user.click(screen.getByRole("button", { name: "Confirm new email" }));
+    await waitFor(() =>
+      expect(authClient.emailOtp.changeEmail).toHaveBeenCalledWith({
+        newEmail: "new@example.com",
+        otp: "222222",
+      })
+    );
   });
 });

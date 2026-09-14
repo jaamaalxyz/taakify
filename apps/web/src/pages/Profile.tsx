@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Copy } from "lucide-react";
 import { toast } from "sonner";
 import { useHousehold } from "../lib/household-context.js";
+import { authClient } from "../lib/auth.js";
 import { api } from "../lib/api.js";
 import { listBooks } from "../lib/repo/books.js";
 import { friendlyError } from "../lib/error-messages.js";
@@ -42,6 +43,19 @@ export function Profile() {
   const [sendingInvite, setSendingInvite] = useState(false);
   const [inviteError, setInviteError] = useState("");
 
+  const [nameOpen, setNameOpen] = useState(false);
+  const [nameValue, setNameValue] = useState(user.name);
+  const [nameError, setNameError] = useState("");
+  const [savingName, setSavingName] = useState(false);
+
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [emailStep, setEmailStep] = useState<"start" | "current-otp" | "new-otp">("start");
+  const [currentOtp, setCurrentOtp] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newOtp, setNewOtp] = useState("");
+  const [emailError, setEmailError] = useState("");
+  const [emailBusy, setEmailBusy] = useState(false);
+
   useEffect(() => {
     listBooks({ householdId: household.id })
       .then((data) => setBooks(data))
@@ -79,6 +93,73 @@ export function Profile() {
     }
   }
 
+  async function handleSaveName(e: FormEvent) {
+    e.preventDefault();
+    setNameError("");
+    setSavingName(true);
+    try {
+      const { error } = await authClient.updateUser({ name: nameValue });
+      if (error) return setNameError(error.message ?? "Couldn't save your name");
+      toast("Name updated");
+      setNameOpen(false);
+    } finally {
+      setSavingName(false);
+    }
+  }
+
+  async function handleSendCurrentEmailOtp() {
+    setEmailError("");
+    setEmailBusy(true);
+    try {
+      const { error } = await authClient.emailOtp.sendVerificationOtp({
+        email: user.email,
+        type: "email-verification",
+      });
+      if (error) return setEmailError(error.message ?? "Couldn't send the code");
+      setEmailStep("current-otp");
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  async function handleRequestEmailChange(e: FormEvent) {
+    e.preventDefault();
+    setEmailError("");
+    setEmailBusy(true);
+    try {
+      const { error } = await authClient.emailOtp.requestEmailChange({ newEmail, otp: currentOtp });
+      if (error) return setEmailError(error.message ?? "Couldn't verify that code");
+      setEmailStep("new-otp");
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  async function handleConfirmEmailChange(e: FormEvent) {
+    e.preventDefault();
+    setEmailError("");
+    setEmailBusy(true);
+    try {
+      const { error } = await authClient.emailOtp.changeEmail({ newEmail, otp: newOtp });
+      if (error) return setEmailError(error.message ?? "Couldn't verify that code");
+      toast("Email updated");
+      setEmailOpen(false);
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  function resetEmailDialog(open: boolean) {
+    setEmailOpen(open);
+    if (!open) {
+      setEmailStep("start");
+      setCurrentOtp("");
+      setNewEmail("");
+      setNewOtp("");
+      setEmailError("");
+    }
+  }
+
   const counts = {
     owned: books?.filter((b) => b.ownership === "owned").length ?? 0,
     borrowed_in: books?.filter((b) => b.ownership === "borrowed_in").length ?? 0,
@@ -97,6 +178,126 @@ export function Profile() {
           Signed in as {user.name} ({user.email}) · {household.role}
         </p>
       </div>
+
+      <section className="space-y-2">
+        <h2 className="text-sm font-semibold">Account</h2>
+        <div className="flex flex-wrap gap-2">
+          <Dialog open={nameOpen} onOpenChange={setNameOpen}>
+            <DialogTrigger asChild>
+              <Button size="sm" variant="outline">
+                Edit name
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Edit name</DialogTitle>
+              </DialogHeader>
+              <form onSubmit={handleSaveName} className="space-y-3">
+                <div className="space-y-1">
+                  <Label htmlFor="profile-name">Name</Label>
+                  <Input
+                    id="profile-name"
+                    value={nameValue}
+                    onChange={(e) => setNameValue(e.target.value)}
+                    required
+                  />
+                </div>
+                {nameError && (
+                  <Alert variant="destructive">
+                    <AlertDescription>{nameError}</AlertDescription>
+                  </Alert>
+                )}
+                <DialogFooter>
+                  <Button type="submit" disabled={savingName}>
+                    {savingName ? "Saving…" : "Save name"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={emailOpen} onOpenChange={resetEmailDialog}>
+            <DialogTrigger asChild>
+              <Button size="sm" variant="outline">
+                Change email
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Change email</DialogTitle>
+              </DialogHeader>
+              {emailStep === "start" && (
+                <div className="space-y-3">
+                  <p className="text-sm text-muted-foreground">
+                    We'll send a code to your current email ({user.email}) first, to confirm it's you.
+                  </p>
+                  {emailError && (
+                    <Alert variant="destructive">
+                      <AlertDescription>{emailError}</AlertDescription>
+                    </Alert>
+                  )}
+                  <DialogFooter>
+                    <Button onClick={handleSendCurrentEmailOtp} disabled={emailBusy}>
+                      {emailBusy ? "Sending…" : "Send code to current email"}
+                    </Button>
+                  </DialogFooter>
+                </div>
+              )}
+              {emailStep === "current-otp" && (
+                <form onSubmit={handleRequestEmailChange} className="space-y-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="current-otp">Code sent to your current email</Label>
+                    <Input
+                      id="current-otp"
+                      value={currentOtp}
+                      onChange={(e) => setCurrentOtp(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="new-email">New email</Label>
+                    <Input
+                      id="new-email"
+                      type="email"
+                      value={newEmail}
+                      onChange={(e) => setNewEmail(e.target.value)}
+                      required
+                    />
+                  </div>
+                  {emailError && (
+                    <Alert variant="destructive">
+                      <AlertDescription>{emailError}</AlertDescription>
+                    </Alert>
+                  )}
+                  <DialogFooter>
+                    <Button type="submit" disabled={emailBusy}>
+                      {emailBusy ? "Sending…" : "Send code to new email"}
+                    </Button>
+                  </DialogFooter>
+                </form>
+              )}
+              {emailStep === "new-otp" && (
+                <form onSubmit={handleConfirmEmailChange} className="space-y-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="new-otp">Code sent to your new email</Label>
+                    <Input id="new-otp" value={newOtp} onChange={(e) => setNewOtp(e.target.value)} required />
+                  </div>
+                  {emailError && (
+                    <Alert variant="destructive">
+                      <AlertDescription>{emailError}</AlertDescription>
+                    </Alert>
+                  )}
+                  <DialogFooter>
+                    <Button type="submit" disabled={emailBusy}>
+                      {emailBusy ? "Confirming…" : "Confirm new email"}
+                    </Button>
+                  </DialogFooter>
+                </form>
+              )}
+            </DialogContent>
+          </Dialog>
+        </div>
+      </section>
 
       <section className="space-y-2">
         <h2 className="text-sm font-semibold">Reading counts</h2>
