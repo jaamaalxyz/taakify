@@ -190,5 +190,13 @@ describe("Profile account settings", () => {
         otp: "222222",
       })
     );
+
+    // Regression: after a successful change, the dialog must reset back to
+    // the "start" step (not remain on "new-otp" with stale values) so a
+    // second change starts fresh.
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Change email" })).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Change email" }));
+    expect(screen.getByRole("button", { name: "Send code to current email" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Code sent to your new email")).not.toBeInTheDocument();
   });
 });

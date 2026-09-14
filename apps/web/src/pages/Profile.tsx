@@ -143,7 +143,7 @@ export function Profile() {
       const { error } = await authClient.emailOtp.changeEmail({ newEmail, otp: newOtp });
       if (error) return setEmailError(error.message ?? "Couldn't verify that code");
       toast("Email updated");
-      setEmailOpen(false);
+      resetEmailDialog(false);
     } finally {
       setEmailBusy(false);
     }
