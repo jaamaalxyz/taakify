@@ -4,6 +4,8 @@
 // apps/api/src/auth.ts -- a missing key means "not configured", not an
 // error, but a *present* key with no EMAIL_FROM is a misconfiguration and
 // fails loudly rather than silently dropping the email.
+import { recordOtp } from "./otp-capture.js";
+
 type OtpType = "sign-in" | "email-verification" | "forget-password" | "change-email";
 
 const SUBJECTS: Record<OtpType, string> = {
@@ -14,6 +16,7 @@ const SUBJECTS: Record<OtpType, string> = {
 };
 
 export async function sendOtpEmail(data: { email: string; otp: string; type: OtpType }): Promise<void> {
+  recordOtp(data.email, data.type, data.otp);
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
     console.log(`[email-otp] ${data.type} code for ${data.email}: ${data.otp}`);
