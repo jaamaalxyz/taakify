@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Taakify — Light Theme Preview</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Nunito:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <style>
+      /* Exact token values from apps/web/src/styles.css :root (light theme) */
+      :root {
+        --radius: 0.75rem;
+        --background: #ffffff;
+        --foreground: #1e221a;
+        --card: #ffffff;
+        --card-foreground: #1e221a;
+        --popover: #ffffff;
+        --popover-foreground: #1e221a;
+        --primary: #38423b;
+        --primary-foreground: #f4efe6;
+        --secondary: #eae3d2;
+        --secondary-foreground: #4a4033;
+        --muted: #efe8da;
+        --muted-foreground: #706b63;
+        --accent: #f3e5df;
+        --accent-foreground: #94482c;
+        --destructive: #b3261e;
+        --destructive-foreground: #ffffff;
+        --border: #d6c7ab;
+        --input: #d6c7ab;
+        --ring: #38423b;
+        --font-sans: "Nunito", ui-sans-serif, system-ui, sans-serif;
+        --font-serif: "Cormorant Garamond", ui-serif, Georgia, serif;
+        /* Decorative-only logo accents (not UI tokens, no text ever sits on
+           these -- WCAG contrast rules don't apply). --accent-foreground is
+           tuned for text contrast on --accent and reads slightly muddy as a
+           bright fill, so the logo uses the more saturated terracotta and an
+           added gold for its three book spines instead. */
+        --logo-terracotta: #a85334;
+        --logo-gold: #c29b38;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--background);
+        color: var(--foreground);
+        font-family: var(--font-sans);
+        line-height: 1.6;
+      }
+
+      .page {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 48px 24px 96px;
+      }
+
+      section {
+        margin-bottom: 56px;
+      }
+
+      section > h2 {
+        font-family: var(--font-sans);
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted-foreground);
+        margin: 0 0 16px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      /* ---------- Header (mirrors AppShell's AppHeader) ---------- */
+      header.app-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 16px;
+        border-bottom: 1px solid var(--border);
+        background: var(--background);
+      }
+
+      .app-header h1 {
+        font-family: var(--font-serif);
+        font-size: 18px;
+        font-weight: 600;
+        margin: 0;
+      }
+
+      .app-header-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .app-header-mark {
+        width: 18px;
+        height: 18px;
+        flex-shrink: 0;
+        color: var(--primary);
+      }
+
+      /* ---------- Hero (mirrors Landing.tsx) ---------- */
+      .hero {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        gap: 20px;
+        padding: 64px 16px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 56px;
+      }
+
+      .hero .mark {
+        width: 40px;
+        height: 40px;
+        color: var(--primary);
+      }
+
+      .hero h1 {
+        font-family: var(--font-serif);
+        font-size: 36px;
+        font-weight: 700;
+        letter-spacing: -0.3px;
+        margin: 0;
+      }
+
+      .hero p {
+        max-width: 620px;
+        color: var(--muted-foreground);
+        font-size: 15px;
+        margin: 0;
+      }
+
+      .hero p.subhead {
+        max-width: none;
+        color: var(--foreground);
+        font-size: 18px;
+        font-weight: 600;
+      }
+
+      /* ---------- Benefit sections (structure borrowed from Gumroad's
+         hero -> short punchy benefit blocks -> closing CTA pitch shape;
+         colors/type are our own existing tokens, unchanged) ---------- */
+      .benefits {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 32px;
+        text-align: center;
+      }
+
+      .benefit h3 {
+        font-family: var(--font-serif);
+        font-size: 22px;
+        font-weight: 700;
+        margin: 0 0 8px;
+      }
+
+      .benefit p {
+        margin: 0;
+        color: var(--muted-foreground);
+        font-size: 14px;
+      }
+
+      .closing {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+        text-align: center;
+        padding: 48px 16px;
+        border-top: 1px solid var(--border);
+      }
+
+      .closing-line {
+        font-family: var(--font-serif);
+        font-size: 28px;
+        font-weight: 700;
+        margin: 0;
+      }
+
+      .hero .actions,
+      .closing .actions {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        width: 100%;
+        max-width: 280px;
+        margin-top: 8px;
+      }
+
+      /* ---------- Buttons ---------- */
+      .btn-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .btn {
+        appearance: none;
+        border: 1px solid transparent;
+        border-radius: var(--radius);
+        padding: 9px 18px;
+        font-family: var(--font-sans);
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        width: 100%;
+      }
+
+      .btn.inline {
+        width: auto;
+      }
+
+      .btn-primary {
+        background: var(--primary);
+        color: var(--primary-foreground);
+      }
+
+      .btn-outline {
+        background: transparent;
+        color: var(--foreground);
+        border-color: var(--border);
+      }
+
+      .btn-ghost {
+        background: transparent;
+        color: var(--foreground);
+      }
+
+      .btn-destructive {
+        background: var(--destructive);
+        color: var(--destructive-foreground);
+      }
+
+      /* ---------- Badges ---------- */
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 2px 10px;
+        font-size: 12px;
+        font-weight: 500;
+        border: 1px solid transparent;
+      }
+
+      .badge-default {
+        background: var(--primary);
+        color: var(--primary-foreground);
+      }
+
+      .badge-secondary {
+        background: var(--secondary);
+        color: var(--secondary-foreground);
+      }
+
+      .badge-outline {
+        background: transparent;
+        color: var(--foreground);
+        border-color: var(--border);
+      }
+
+      .badge-destructive {
+        background: var(--destructive);
+        color: var(--destructive-foreground);
+      }
+
+      .badge-accent {
+        background: var(--accent);
+        color: var(--accent-foreground);
+        border: 1px dashed var(--accent-foreground);
+      }
+
+      /* ---------- Cards / book grid (mirrors BookCard.tsx) ---------- */
+      .card {
+        background: var(--card);
+        color: var(--card-foreground);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+      }
+
+      .book-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        gap: 12px;
+      }
+
+      .book-card {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 8px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+      }
+
+      .book-cover {
+        aspect-ratio: 2 / 3;
+        border-radius: calc(var(--radius) - 0.25rem);
+        background: var(--muted);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted-foreground);
+        font-size: 12px;
+      }
+
+      .book-title {
+        font-family: var(--font-serif);
+        font-size: 16px;
+        font-weight: 600;
+        margin: 0;
+        line-height: 1.25;
+      }
+
+      .book-author {
+        font-size: 12px;
+        color: var(--muted-foreground);
+        margin: 0;
+      }
+
+      /* ---------- Bookcase card ---------- */
+      .bookcase-card {
+        padding: 16px;
+      }
+
+      .bookcase-card .head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .bookcase-card .head h3 {
+        font-family: var(--font-serif);
+        font-size: 18px;
+        margin: 0;
+      }
+
+      .shelf-pill {
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 4px 12px;
+        font-size: 13px;
+        color: var(--foreground);
+      }
+
+      .shelf-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      /* ---------- Loan row ---------- */
+      .loan-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 12px;
+      }
+
+      .loan-cover {
+        width: 40px;
+        height: 56px;
+        flex-shrink: 0;
+        border-radius: calc(var(--radius) - 0.25rem);
+        background: var(--muted);
+      }
+
+      .loan-info {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .loan-info .title {
+        font-size: 14px;
+        font-weight: 600;
+        margin: 0 0 2px;
+      }
+
+      .loan-info .meta {
+        font-size: 12px;
+        color: var(--muted-foreground);
+        margin: 0 0 6px;
+      }
+
+      .loan-info .meta.overdue {
+        color: var(--destructive);
+      }
+
+      /* ---------- Swatches ---------- */
+      .swatches {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 12px;
+      }
+
+      .swatch {
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+        background: var(--card);
+      }
+
+      .swatch .fill {
+        height: 56px;
+      }
+
+      .swatch .label {
+        padding: 8px 10px;
+        font-size: 12px;
+      }
+
+      .swatch .label .name {
+        display: block;
+        font-weight: 600;
+      }
+
+      .swatch .label .hex {
+        display: block;
+        color: var(--muted-foreground);
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+      }
+
+      @media (min-width: 480px) {
+        .btn {
+          width: auto;
+        }
+        .hero .actions,
+        .closing .actions {
+          flex-direction: row;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="app-header-title">
+        <svg class="app-header-mark" viewBox="0 0 24 24" fill="currentColor">
+          <path
+            d="M4 9 12 3 20 9"
+            fill="none"
+            stroke="var(--primary)"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+          <path d="M4 9v8" fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" />
+          <path d="M20 9v8" fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" />
+          <rect x="8" y="9.5" width="2.1" height="7.5" rx="0.5" fill="var(--primary)" />
+          <rect x="10.6" y="7.3" width="2.6" height="9.7" rx="0.5" fill="var(--logo-terracotta)" />
+          <rect x="13.7" y="10.4" width="2.1" height="6.6" rx="0.5" fill="var(--logo-gold)" />
+          <path
+            d="M4 17c2.8-0.9 5.5-0.4 8 1 2.5-1.4 5.2-1.9 8-1v3c-2.8-0.9-5.5-0.4-8 1-2.5-1.4-5.2-1.9-8-1z"
+            fill="var(--primary)"
+          />
+        </svg>
+        <h1>The Uddins' Library</h1>
+      </div>
+      <span class="badge badge-outline">Synced</span>
+    </header>
+
+    <div class="page">
+      <section class="hero">
+        <svg class="mark" viewBox="0 0 24 24" fill="currentColor">
+          <path
+            d="M4 9 12 3 20 9"
+            fill="none"
+            stroke="var(--primary)"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+          <path d="M4 9v8" fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" />
+          <path d="M20 9v8" fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" />
+          <rect x="8" y="9.5" width="2.1" height="7.5" rx="0.5" fill="var(--primary)" />
+          <rect x="10.6" y="7.3" width="2.6" height="9.7" rx="0.5" fill="var(--logo-terracotta)" />
+          <rect x="13.7" y="10.4" width="2.1" height="6.6" rx="0.5" fill="var(--logo-gold)" />
+          <path
+            d="M4 17c2.8-0.9 5.5-0.4 8 1 2.5-1.4 5.2-1.9 8-1v3c-2.8-0.9-5.5-0.4-8 1-2.5-1.4-5.2-1.9-8-1z"
+            fill="var(--primary)"
+          />
+        </svg>
+        <h1>Taakify</h1>
+        <p class="subhead">A private library for your household. Works even offline.</p>
+      </section>
+
+      <section class="benefits">
+        <div class="benefit">
+          <h3>Catalog every shelf</h3>
+          <p>Add books in seconds and always know what you own, and where.</p>
+        </div>
+        <div class="benefit">
+          <h3>See what everyone's reading</h3>
+          <p>One shared shelf for your whole household, no more asking who's got what.</p>
+        </div>
+        <div class="benefit">
+          <h3>Never lose a lent book</h3>
+          <p>Track who borrowed what and when it's due, so nothing quietly disappears.</p>
+        </div>
+      </section>
+
+      <section class="closing">
+        <h2 class="closing-line">Your books. Your shelves. Your household.</h2>
+        <div class="actions">
+          <button class="btn btn-primary">Sign up</button>
+          <button class="btn btn-outline">Sign in</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Buttons</h2>
+        <div class="btn-row">
+          <button class="btn btn-primary inline">Save changes</button>
+          <button class="btn btn-outline inline">Cancel</button>
+          <button class="btn btn-ghost inline">Sign out</button>
+          <button class="btn btn-destructive inline">Sign out anyway</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Badges</h2>
+        <div class="btn-row">
+          <span class="badge badge-default">Reading</span>
+          <span class="badge badge-secondary">Finished</span>
+          <span class="badge badge-outline">Owned</span>
+          <span class="badge badge-destructive">Overdue</span>
+          <span class="badge badge-accent">Lent to Nahida</span>
+        </div>
+      </section>
+
+      <section>
+        <h2>Library</h2>
+        <div class="book-grid">
+          <div class="book-card">
+            <div class="book-cover">Cover</div>
+            <p class="book-title">The Diary of a Young Girl</p>
+            <p class="book-author">Anne Frank</p>
+            <span class="badge badge-outline">Owned</span>
+          </div>
+          <div class="book-card">
+            <div class="book-cover">Cover</div>
+            <p class="book-title">Nondito Noroke</p>
+            <p class="book-author">Humayun Ahmed</p>
+            <span class="badge badge-default">Reading</span>
+          </div>
+          <div class="book-card">
+            <div class="book-cover">Cover</div>
+            <p class="book-title">Memsaheb</p>
+            <p class="book-author">Nimai Bhattacharya</p>
+            <span class="badge badge-secondary">Finished</span>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Bookcase</h2>
+        <div class="card bookcase-card">
+          <div class="head">
+            <h3>Living Room Oak Shelf</h3>
+            <button class="btn btn-outline inline">Add shelf</button>
+          </div>
+          <div class="shelf-row">
+            <span class="shelf-pill">Fiction</span>
+            <span class="shelf-pill">Poetry</span>
+            <span class="shelf-pill">Reference</span>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Loans</h2>
+        <div class="loan-row">
+          <div class="loan-cover"></div>
+          <div class="loan-info">
+            <p class="title">Nondito Noroke</p>
+            <p class="meta overdue">Overdue from Nahida · 3 days overdue</p>
+            <span class="badge badge-destructive">Overdue</span>
+          </div>
+          <button class="btn btn-outline inline">Mark returned</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Color tokens</h2>
+        <div class="swatches">
+          <div class="swatch">
+            <div class="fill" style="background: var(--background)"></div>
+            <div class="label"><span class="name">background</span><span class="hex">#ffffff</span></div>
+          </div>
+          <div class="swatch">
+            <div class="fill" style="background: var(--foreground)"></div>
+            <div class="label" style="color: #fff; background: var(--foreground)">
+              <span class="name">foreground</span><span class="hex">#1e221a</span>
+            </div>
+          </div>
+          <div class="swatch">
+            <div class="fill" style="background: var(--card); border-bottom: 1px solid var(--border)"></div>
+            <div class="label"><span class="name">card</span><span class="hex">#ffffff</span></div>
+          </div>
+          <div class="swatch">
+            <div class="fill" style="background: var(--primary)"></div>
+            <div class="label" style="color: #fff; background: var(--primary)">
+              <span class="name">primary</span><span class="hex">#38423b</span>
+            </div>
+          </div>
+          <div class="swatch">
+            <div class="fill" style="background: var(--secondary)"></div>
+            <div class="label"><span class="name">secondary</span><span class="hex">#eae3d2</span></div>
+          </div>
+          <div class="swatch">
+            <div class="fill" style="background: var(--muted)"></div>
+            <div class="label"><span class="name">muted</span><span class="hex">#efe8da</span></div>
+          </div>
+          <div class="swatch">
+            <div class="fill" style="background: var(--accent)"></div>
+            <div class="label"><span class="name">accent</span><span class="hex">#f3e5df</span></div>
+          </div>
+          <div class="swatch">
+            <div class="fill" style="background: var(--destructive)"></div>
+            <div class="label" style="color: #fff; background: var(--destructive)">
+              <span class="name">destructive</span><span class="hex">#b3261e</span>
+            </div>
+          </div>
+          <div class="swatch">
+            <div class="fill" style="background: var(--border)"></div>
+            <div class="label"><span class="name">border</span><span class="hex">#d6c7ab</span></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

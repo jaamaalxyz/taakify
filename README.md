@@ -21,10 +21,19 @@ Prereqs: Docker, Node 24, pnpm.
     pnpm install
     cp apps/api/.env.example apps/api/.env
     pnpm migrate
-    pnpm dev:api    # :3001
-    pnpm dev:web    # :5173
+    pnpm dev:api    # :3011
+    pnpm dev:web    # :5173 (proxies /api -> :3011)
+
+Open <http://localhost:5173> in a browser to use the app.
 
 Tests: `pnpm test` (uses the taakify_test database on the same Postgres).
+
+End-to-end tests (Playwright, drives the real UI against the dev stack
+above): one-time setup `pnpm exec playwright install chromium`, then
+`pnpm test:e2e` with `docker compose` up and `pnpm migrate` already run
+(it starts `dev:api`/`dev:web` itself if they aren't already running). Runs
+serially and takes several minutes; `pnpm test:e2e e2e/home.spec.ts` runs a
+single spec file.
 
 Google sign-in (optional in dev): create an OAuth client in Google Cloud
 Console with redirect URI `http://localhost:5173/api/auth/callback/google`
