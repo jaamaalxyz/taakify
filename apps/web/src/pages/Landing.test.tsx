@@ -28,9 +28,8 @@ describe("Landing", () => {
     ).toBeInTheDocument();
   });
 
-  it("links to sign up and sign in, once each, after the value props", () => {
+  it("links to the unified sign-in flow with a single CTA", () => {
     renderLanding();
-    expect(screen.getByRole("link", { name: "Sign up" })).toHaveAttribute("href", "/signup");
-    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/signin");
+    expect(screen.getByRole("link", { name: "Get started" })).toHaveAttribute("href", "/signin");
   });
 });

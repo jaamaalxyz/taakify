@@ -41,10 +41,7 @@ export function Landing() {
         </h2>
         <div className="flex w-full max-w-xs flex-col gap-3">
           <Button asChild className="w-full">
-            <Link to="/signup">Sign up</Link>
-          </Button>
-          <Button asChild variant="outline" className="w-full">
-            <Link to="/signin">Sign in</Link>
+            <Link to="/signin">Get started</Link>
           </Button>
         </div>
       </section>
