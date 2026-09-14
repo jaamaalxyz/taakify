@@ -5,6 +5,7 @@ import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Skeleton } from "../components/ui/skeleton.js";
+import { Logo } from "../components/Logo.js";
 
 type Info = { householdName: string; email: string; role: string };
 
@@ -28,7 +29,8 @@ export function InviteAccept({ authed }: { authed: boolean }) {
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center p-4">
+    <main className="flex min-h-dvh flex-col items-center justify-center gap-6 p-4">
+      <Logo className="h-10 w-10" />
       {error ? (
         <Alert variant="destructive" className="w-full max-w-sm">
           <AlertDescription>Invite problem: {error}</AlertDescription>

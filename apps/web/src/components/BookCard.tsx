@@ -40,7 +40,7 @@ export function BookCard({ book, unsynced }: { book: LibraryBook; unsynced?: boo
         )}
       </div>
       <div className="space-y-1">
-        <p className="line-clamp-2 text-sm font-medium">{book.edition.title}</p>
+        <p className="line-clamp-2 font-serif text-base font-semibold">{book.edition.title}</p>
         <p className="line-clamp-1 text-xs text-muted-foreground">{book.edition.authors}</p>
         <Badge variant="outline">{OWNERSHIP_LABELS[book.ownership]}</Badge>
         {unsynced && <UnsyncedBadge subject="book" />}

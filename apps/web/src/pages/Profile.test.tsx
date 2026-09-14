@@ -6,6 +6,7 @@ import { Profile } from "./Profile.js";
 import { api } from "../lib/api.js";
 import { listBooks } from "../lib/repo/books.js";
 import { useHousehold } from "../lib/household-context.js";
+import { authClient } from "../lib/auth.js";
 import { toast } from "sonner";
 
 // Invites (/api/households/:id/invites) deliberately stay on api() — invite/
@@ -17,6 +18,16 @@ vi.mock("../lib/api.js", async (importOriginal) => {
 });
 vi.mock("../lib/repo/books.js", () => ({ listBooks: vi.fn() }));
 vi.mock("../lib/household-context.js", () => ({ useHousehold: vi.fn() }));
+vi.mock("../lib/auth.js", () => ({
+  authClient: {
+    emailOtp: {
+      sendVerificationOtp: vi.fn(),
+      requestEmailChange: vi.fn(),
+      changeEmail: vi.fn(),
+    },
+    updateUser: vi.fn(),
+  },
+}));
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 
 const household = { id: "h1", name: "Family Library", role: "owner" };
@@ -62,11 +73,14 @@ function renderProfile() {
   );
 }
 
+const refreshUser = vi.fn().mockResolvedValue(undefined);
+
 beforeEach(() => {
   vi.mocked(api).mockReset();
   vi.mocked(listBooks).mockReset();
   vi.mocked(toast).mockReset();
-  vi.mocked(useHousehold).mockReturnValue({ user, household, members });
+  refreshUser.mockClear();
+  vi.mocked(useHousehold).mockReturnValue({ user, household, members, refreshUser });
 });
 
 describe("Profile", () => {
@@ -121,5 +135,99 @@ describe("Profile", () => {
     );
     expect(await screen.findByDisplayValue(`${location.origin}/invite/tok123`)).toBeInTheDocument();
     expect(toast).toHaveBeenCalledWith("Invite created");
+  });
+});
+
+describe("Profile account settings", () => {
+  beforeEach(() => {
+    mockApi();
+  });
+
+  it("changes the display name", async () => {
+    const user = userEvent.setup();
+    vi.mocked(authClient.updateUser).mockResolvedValue({ error: null } as never);
+    renderProfile();
+
+    await user.click(screen.getByRole("button", { name: "Edit name" }));
+    const nameInput = screen.getByLabelText("Name");
+    await user.clear(nameInput);
+    await user.type(nameInput, "Grace Hopper");
+    await user.click(screen.getByRole("button", { name: "Save name" }));
+
+    await waitFor(() =>
+      expect(authClient.updateUser).toHaveBeenCalledWith({ name: "Grace Hopper" })
+    );
+    // Regression: without this, the "Signed in as ..." line and a second
+    // email-change attempt would keep using the stale user from context.
+    await waitFor(() => expect(refreshUser).toHaveBeenCalled());
+  });
+
+  it("resets the name dialog's error and value when closed without saving", async () => {
+    const user = userEvent.setup();
+    vi.mocked(authClient.updateUser).mockResolvedValue({ error: { message: "nope" } } as never);
+    renderProfile();
+
+    await user.click(screen.getByRole("button", { name: "Edit name" }));
+    const nameInput = screen.getByLabelText("Name");
+    await user.clear(nameInput);
+    await user.type(nameInput, "Bad Name");
+    await user.click(screen.getByRole("button", { name: "Save name" }));
+    await screen.findByText("nope");
+
+    // Close without saving (Escape triggers the Dialog's onOpenChange(false)).
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByLabelText("Name")).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Edit name" }));
+    expect(screen.getByLabelText("Name")).toHaveValue("Ada");
+    expect(screen.queryByText("nope")).not.toBeInTheDocument();
+  });
+
+  it("walks through the three-step email change", async () => {
+    const user = userEvent.setup();
+    vi.mocked(authClient.emailOtp.sendVerificationOtp).mockResolvedValue({ error: null } as never);
+    vi.mocked(authClient.emailOtp.requestEmailChange).mockResolvedValue({ error: null } as never);
+    vi.mocked(authClient.emailOtp.changeEmail).mockResolvedValue({ error: null } as never);
+    renderProfile();
+
+    await user.click(screen.getByRole("button", { name: "Change email" }));
+    await user.click(screen.getByRole("button", { name: "Send code to current email" }));
+    await waitFor(() =>
+      expect(authClient.emailOtp.sendVerificationOtp).toHaveBeenCalledWith({
+        email: expect.any(String),
+        type: "email-verification",
+      })
+    );
+
+    await user.type(screen.getByLabelText("Code sent to your current email"), "111111");
+    await user.type(screen.getByLabelText("New email"), "new@example.com");
+    await user.click(screen.getByRole("button", { name: "Send code to new email" }));
+    await waitFor(() =>
+      expect(authClient.emailOtp.requestEmailChange).toHaveBeenCalledWith({
+        newEmail: "new@example.com",
+        otp: "111111",
+      })
+    );
+
+    await user.type(screen.getByLabelText("Code sent to your new email"), "222222");
+    await user.click(screen.getByRole("button", { name: "Confirm new email" }));
+    await waitFor(() =>
+      expect(authClient.emailOtp.changeEmail).toHaveBeenCalledWith({
+        newEmail: "new@example.com",
+        otp: "222222",
+      })
+    );
+    // Regression: without this, a second email change in the same session
+    // would send its current-email OTP to the now-stale address, which no
+    // longer matches the session's real current email server-side.
+    await waitFor(() => expect(refreshUser).toHaveBeenCalled());
+
+    // Regression: after a successful change, the dialog must reset back to
+    // the "start" step (not remain on "new-otp" with stale values) so a
+    // second change starts fresh.
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Change email" })).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Change email" }));
+    expect(screen.getByRole("button", { name: "Send code to current email" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Code sent to your new email")).not.toBeInTheDocument();
   });
 });

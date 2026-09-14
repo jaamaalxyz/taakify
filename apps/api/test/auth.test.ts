@@ -28,4 +28,16 @@ describe("auth", () => {
     const me = await app.request("/api/me", { headers: { cookie } });
     expect(me.status).toBe(401);
   });
+
+  it("rejects password sign-up now that email+password is disabled", async () => {
+    const res = await app.request("/api/auth/sign-up/email", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "nopass@test.local", password: "password-123", name: "Nope" }),
+    });
+    // Assert specifically a 4xx rejection, not just "not 200" -- the loose
+    // version would pass equally on an unintended 500.
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
 });

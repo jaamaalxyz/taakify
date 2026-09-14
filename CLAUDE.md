@@ -12,7 +12,7 @@ Spec: `docs/superpowers/specs/2026-07-16-taakify-bookshelf-design.md`
 Plans: `docs/superpowers/plans/`
 
 Stack: React + Vite PWA · PGlite (in-browser Postgres) · ElectricSQL (sync) ·
-Hono API · better-auth (email/password + Google) · Postgres · Docker Compose.
+Hono API · better-auth (email-OTP + Google) · Postgres · Docker Compose.
 Sync is fully wired up (Plan 3): every book-domain screen reads/writes
 against a PGlite mirror kept live by an Electric shape stream, with offline
 writes queued in a client outbox — see "### Local-first sync" below.
@@ -43,7 +43,7 @@ Test:
 pnpm test                                   # from root, runs both @taakify/api and @taakify/web tests
 pnpm --filter @taakify/api test -- households.test.ts   # single api file
 pnpm --filter @taakify/api test -- -t "some test name"  # single api test by name
-pnpm --filter @taakify/web test -- SignIn.test.tsx      # single web file
+pnpm --filter @taakify/web test -- Auth.test.tsx         # single web file
 pnpm test:e2e                               # Playwright E2E suite (needs docker compose + pnpm migrate + dev:api/dev:web already runnable; one-time setup: pnpm exec playwright install chromium)
 pnpm test:e2e e2e/home.spec.ts              # single E2E spec file
 ```
@@ -113,12 +113,12 @@ queries — the RLS policies are meaningless without `app.user_id` set.
 
 ### Auth
 
-`apps/api/src/auth.ts` configures better-auth (email/password + optional
-Google, gated on `GOOGLE_CLIENT_ID`/`SECRET` being set) directly on
-`adminPool`, mounted at `/api/auth/*` via `app.all` in `app.ts` (better-auth
-does its own method dispatch under that path). `BETTER_AUTH_SECRET` is
-required at startup — better-auth's dev-secret fallback is intentionally
-disabled (see the throw in `auth.ts`).
+`apps/api/src/auth.ts` configures better-auth (email-OTP + optional Google,
+gated on `GOOGLE_CLIENT_ID`/`SECRET` being set) directly on `adminPool`,
+mounted at `/api/auth/*` via `app.all` in `app.ts` (better-auth does its own
+method dispatch under that path). `BETTER_AUTH_SECRET` is required at
+startup — better-auth's dev-secret fallback is intentionally disabled (see
+the throw in `auth.ts`).
 
 `middleware/session.ts`'s `requireUser` calls `auth.api.getSession` and
 treats any thrown error (malformed cookie, transient store failure) the same
@@ -128,6 +128,22 @@ On the client, `apps/web/src/lib/safe-next.ts` guards any `?next=` redirect
 target used after auth — only in-app absolute paths are honored, to close
 the open-redirect hole a tampered `//evil.com` `next` param would otherwise
 open.
+
+#### Email-OTP, not password
+
+Password auth is retired (`emailAndPassword: { enabled: false }` in
+`auth.ts`) — sign-in and sign-up are the same passwordless flow via
+better-auth's `emailOTP` plugin. `storeOTP: "hashed"` means only a hash of
+each OTP is ever persisted in the `verification` table; a real trap this
+migration hit is that this also makes `auth.api.getVerificationOTP` unusable
+— it throws "OTP is hashed, cannot return the plain text OTP" regardless of
+environment, since the plaintext genuinely isn't recoverable from storage.
+`apps/api/src/lib/otp-capture.ts` works around this for test/E2E code only:
+it captures the plaintext at send time (the one point it still exists in
+memory, inside `lib/email.ts`'s `sendOtpEmail`) into an in-memory map, gated
+to never populate outside non-production so hashed storage stays the only
+copy in production. `routes/test-only.ts` exposes it as a `GET /api/test-only/otp`
+lookup, itself inert (404) whenever `NODE_ENV === "production"`.
 
 ### Invites
 

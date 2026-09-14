@@ -24,6 +24,7 @@ import { Button } from "./ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
 import { Skeleton } from "./ui/skeleton.js";
 import { SyncBadge } from "./SyncBadge.js";
+import { Logo } from "./Logo.js";
 import { cn } from "../lib/utils.js";
 
 // Best-effort flush timeout before sign-out proceeds regardless -- long
@@ -170,7 +171,8 @@ function AppHeader() {
   return (
     <header className="flex items-center justify-between gap-3 border-b p-4">
       <div className="flex min-w-0 items-center gap-2">
-        <h1 className="truncate text-lg font-semibold">{household.name}</h1>
+        <Logo className="h-5 w-5 shrink-0" />
+        <h1 className="truncate font-serif text-lg font-semibold">{household.name}</h1>
         <SyncBadge />
       </div>
       <Button variant="ghost" size="icon" aria-label="Sign out" onClick={handleSignOutClick}>

@@ -114,7 +114,7 @@ beforeEach(() => {
   vi.mocked(updateContact).mockReset();
   vi.mocked(listBooks).mockReset();
   vi.mocked(toast).mockReset();
-  vi.mocked(useHousehold).mockReturnValue({ user, household, members: [] });
+  vi.mocked(useHousehold).mockReturnValue({ user, household, members: [], refreshUser: vi.fn() });
   unsyncedLoanIds.clear();
 });
 

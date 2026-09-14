@@ -15,6 +15,7 @@ import { loans } from "./routes/loans.js";
 import { bootstrap } from "./routes/bootstrap.js";
 import { syncShape } from "./routes/sync-shape.js";
 import { storageDev } from "./routes/storage-dev.js";
+import { testOnly } from "./routes/test-only.js";
 
 export const app = new Hono();
 
@@ -70,3 +71,5 @@ app.route("/api/bootstrap", bootstrap);
 app.route("/api/sync/shape", syncShape);
 // Dev-only object serving for the fs storage impl (see storage-dev.ts).
 app.route("/api/storage", storageDev);
+// Dev/test/E2E-only OTP read-back -- see test-only.ts.
+app.route("/api/test-only", testOnly);

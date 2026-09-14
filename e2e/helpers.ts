@@ -15,10 +15,18 @@ export async function signUpAndOnboard(page: Page): Promise<SignedUpUser> {
   const householdName = `E2E Household ${randomUUID().slice(0, 8)}`;
 
   await page.goto("/signup");
-  await page.getByLabel("Your name").fill("E2E Tester");
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill("password-123456");
-  await page.getByRole("button", { name: "Sign up" }).click();
+  await page.getByLabel(/Your name/).fill("E2E Test User");
+  await page.getByRole("button", { name: "Continue with email" }).click();
+
+  await page.getByLabel(/6-digit code/i).waitFor();
+  const otpRes = await page.request.get(
+    `/api/test-only/otp?email=${encodeURIComponent(email)}&type=sign-in`
+  );
+  const { otp } = await otpRes.json();
+  if (!otp) throw new Error(`no OTP pending for ${email}`);
+  await page.getByLabel(/6-digit code/i).fill(otp);
+  await page.getByRole("button", { name: "Verify" }).click();
 
   await expect(page.getByRole("heading", { name: "Name your library" })).toBeVisible();
   await page.getByLabel("Library name").fill(householdName);

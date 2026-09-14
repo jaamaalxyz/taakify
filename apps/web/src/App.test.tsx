@@ -8,7 +8,8 @@ import { api } from "./lib/api.js";
 vi.mock("./lib/auth.js", () => ({
   authClient: {
     useSession: vi.fn(),
-    signIn: { email: vi.fn(), social: vi.fn() },
+    emailOtp: { sendVerificationOtp: vi.fn(), verifyEmail: vi.fn() },
+    signIn: { emailOtp: vi.fn(), social: vi.fn() },
     signOut: vi.fn(),
   },
 }));
@@ -97,8 +98,7 @@ describe("App routing", () => {
     vi.mocked(authClient.useSession).mockReturnValue({ data: null, isPending: false } as never);
     renderApp("/");
     expect(screen.getByRole("heading", { name: "Taakify" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Sign up" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Sign in" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Get started" })).toBeInTheDocument();
   });
 
   it("still redirects unauthenticated users from /library to /signin", () => {

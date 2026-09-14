@@ -212,7 +212,7 @@ export function Bookcases() {
           {bookcases.map((bc) => (
             <Card key={bc.id}>
               <CardHeader className="flex flex-row items-center justify-between gap-2">
-                <CardTitle className="text-sm">{bc.name}</CardTitle>
+                <CardTitle className="font-serif text-lg">{bc.name}</CardTitle>
                 <Button size="sm" variant="outline" onClick={() => setAddShelfFor(bc)}>
                   Add shelf
                 </Button>

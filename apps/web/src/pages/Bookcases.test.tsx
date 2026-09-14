@@ -72,7 +72,7 @@ beforeEach(() => {
   vi.mocked(updateShelf).mockReset();
   vi.mocked(reorderShelves).mockReset();
   vi.mocked(toast).mockReset();
-  vi.mocked(useHousehold).mockReturnValue({ user, household, members: [] });
+  vi.mocked(useHousehold).mockReturnValue({ user, household, members: [], refreshUser: vi.fn() });
 });
 
 describe("Bookcases", () => {
