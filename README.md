@@ -10,7 +10,7 @@ borrowed. Multi-tenant from day one.
 ## Stack
 
 React + Vite PWA · PGlite (in-browser Postgres) · ElectricSQL (sync) ·
-Hono API · better-auth (email/password + Google) · Postgres ·
+Hono API · better-auth (email-OTP + Google) · Postgres ·
 Docker Compose on a single VM · Cloudflare R2 for cover images.
 
 ## Development

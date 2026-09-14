@@ -18,7 +18,10 @@ type OtpType = "sign-in" | "email-verification" | "forget-password" | "change-em
 const pending = new Map<string, string>();
 
 function key(email: string, type: string): string {
-  return `${type}:${email}`;
+  // better-auth lowercases the email before calling sendVerificationOTP, so
+  // recordOtp's key is always lowercase -- normalize here too so a
+  // mixed-case lookup from getPendingOtp's caller doesn't silently miss.
+  return `${type}:${email.toLowerCase()}`;
 }
 
 export function recordOtp(email: string, type: OtpType, otp: string): void {

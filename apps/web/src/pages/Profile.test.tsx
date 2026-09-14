@@ -73,11 +73,14 @@ function renderProfile() {
   );
 }
 
+const refreshUser = vi.fn().mockResolvedValue(undefined);
+
 beforeEach(() => {
   vi.mocked(api).mockReset();
   vi.mocked(listBooks).mockReset();
   vi.mocked(toast).mockReset();
-  vi.mocked(useHousehold).mockReturnValue({ user, household, members });
+  refreshUser.mockClear();
+  vi.mocked(useHousehold).mockReturnValue({ user, household, members, refreshUser });
 });
 
 describe("Profile", () => {
@@ -154,6 +157,30 @@ describe("Profile account settings", () => {
     await waitFor(() =>
       expect(authClient.updateUser).toHaveBeenCalledWith({ name: "Grace Hopper" })
     );
+    // Regression: without this, the "Signed in as ..." line and a second
+    // email-change attempt would keep using the stale user from context.
+    await waitFor(() => expect(refreshUser).toHaveBeenCalled());
+  });
+
+  it("resets the name dialog's error and value when closed without saving", async () => {
+    const user = userEvent.setup();
+    vi.mocked(authClient.updateUser).mockResolvedValue({ error: { message: "nope" } } as never);
+    renderProfile();
+
+    await user.click(screen.getByRole("button", { name: "Edit name" }));
+    const nameInput = screen.getByLabelText("Name");
+    await user.clear(nameInput);
+    await user.type(nameInput, "Bad Name");
+    await user.click(screen.getByRole("button", { name: "Save name" }));
+    await screen.findByText("nope");
+
+    // Close without saving (Escape triggers the Dialog's onOpenChange(false)).
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByLabelText("Name")).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Edit name" }));
+    expect(screen.getByLabelText("Name")).toHaveValue("Ada");
+    expect(screen.queryByText("nope")).not.toBeInTheDocument();
   });
 
   it("walks through the three-step email change", async () => {
@@ -190,6 +217,10 @@ describe("Profile account settings", () => {
         otp: "222222",
       })
     );
+    // Regression: without this, a second email change in the same session
+    // would send its current-email OTP to the now-stale address, which no
+    // longer matches the session's real current email server-side.
+    await waitFor(() => expect(refreshUser).toHaveBeenCalled());
 
     // Regression: after a successful change, the dialog must reset back to
     // the "start" step (not remain on "new-otp" with stale values) so a

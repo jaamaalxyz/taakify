@@ -1,13 +1,26 @@
 import { betterAuth } from "better-auth";
 import { emailOTP } from "better-auth/plugins";
 import { adminPool } from "./db/pool.js";
-import { sendOtpEmail } from "./lib/email.js";
+import { sendOtpEmail, OTP_EXPIRES_IN_SECONDS } from "./lib/email.js";
 
 const googleEnabled = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 
 if (!process.env.BETTER_AUTH_SECRET) {
   // better-auth silently falls back to a well-known dev secret — never allow that.
   throw new Error("BETTER_AUTH_SECRET is not set");
+}
+
+// better-auth's internal `runInBackgroundOrAwait` swallows any error
+// `sendVerificationOTP` throws (logs it, nothing more) -- so email.ts's own
+// runtime check for this exact misconfiguration (RESEND_API_KEY set without
+// EMAIL_FROM) never reaches the client: send-verification-otp still returns
+// { success: true } and the user is left waiting forever for a code that was
+// never sent. With password auth retired, that's a full, silent lockout.
+// Fail loudly at boot instead, matching this file's BETTER_AUTH_SECRET
+// convention. email.ts keeps its own check too (defense in depth, and it's
+// exercised directly by email.test.ts) -- this is a second, earlier gate.
+if (process.env.RESEND_API_KEY && !process.env.EMAIL_FROM) {
+  throw new Error("EMAIL_FROM is not set (required whenever RESEND_API_KEY is set)");
 }
 
 export const auth = betterAuth({
@@ -25,7 +38,7 @@ export const auth = betterAuth({
     emailOTP({
       sendVerificationOTP: sendOtpEmail,
       otpLength: 6,
-      expiresIn: 300,
+      expiresIn: OTP_EXPIRES_IN_SECONDS,
       allowedAttempts: 3,
       storeOTP: "hashed",
       changeEmail: { enabled: true, verifyCurrentEmail: true },

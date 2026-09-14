@@ -6,6 +6,10 @@
 // fails loudly rather than silently dropping the email.
 import { recordOtp } from "./otp-capture.js";
 
+// Shared with auth.ts's `emailOTP({ expiresIn })` config so the email body's
+// expiry text can never silently drift out of sync with the real value.
+export const OTP_EXPIRES_IN_SECONDS = 300;
+
 type OtpType = "sign-in" | "email-verification" | "forget-password" | "change-email";
 
 const SUBJECTS: Record<OtpType, string> = {
@@ -32,7 +36,7 @@ export async function sendOtpEmail(data: { email: string; otp: string; type: Otp
     from,
     to: data.email,
     subject: SUBJECTS[data.type],
-    text: `Your code is ${data.otp}. It expires in 5 minutes.`,
+    text: `Your code is ${data.otp}. It expires in ${OTP_EXPIRES_IN_SECONDS / 60} minutes.`,
   });
   if (error) throw new Error(`Resend send failed: ${error.message}`);
 }

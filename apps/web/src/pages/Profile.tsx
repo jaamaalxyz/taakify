@@ -32,7 +32,7 @@ type Book = {
 };
 
 export function Profile() {
-  const { user, household, members } = useHousehold();
+  const { user, household, members, refreshUser } = useHousehold();
 
   const [books, setBooks] = useState<Book[] | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -101,9 +101,18 @@ export function Profile() {
       const { error } = await authClient.updateUser({ name: nameValue });
       if (error) return setNameError(error.message ?? "Couldn't save your name");
       toast("Name updated");
+      await refreshUser();
       setNameOpen(false);
     } finally {
       setSavingName(false);
+    }
+  }
+
+  function resetNameDialog(open: boolean) {
+    setNameOpen(open);
+    if (!open) {
+      setNameError("");
+      setNameValue(user.name);
     }
   }
 
@@ -143,6 +152,7 @@ export function Profile() {
       const { error } = await authClient.emailOtp.changeEmail({ newEmail, otp: newOtp });
       if (error) return setEmailError(error.message ?? "Couldn't verify that code");
       toast("Email updated");
+      await refreshUser();
       resetEmailDialog(false);
     } finally {
       setEmailBusy(false);
@@ -182,7 +192,7 @@ export function Profile() {
       <section className="space-y-2">
         <h2 className="text-sm font-semibold">Account</h2>
         <div className="flex flex-wrap gap-2">
-          <Dialog open={nameOpen} onOpenChange={setNameOpen}>
+          <Dialog open={nameOpen} onOpenChange={resetNameDialog}>
             <DialogTrigger asChild>
               <Button size="sm" variant="outline">
                 Edit name

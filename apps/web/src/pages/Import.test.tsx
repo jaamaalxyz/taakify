@@ -33,6 +33,7 @@ beforeEach(() => {
     user: { id: "u1", email: "a@b.com", name: "Ada" },
     household,
     members: [],
+    refreshUser: vi.fn(),
   });
 });
 

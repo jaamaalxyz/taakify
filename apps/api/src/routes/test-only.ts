@@ -1,9 +1,12 @@
 // Test/E2E-only escape hatch to read back a pending OTP without a real
 // inbox. Mirrors storage-dev.ts's env-gating style: always mounted, but
-// functionally inert (404) outside non-production environments. Never
-// reachable in production regardless of how NODE_ENV is set on this
-// container -- see the throw in auth.ts for the project's convention of
-// never trusting a soft default for anything security-sensitive.
+// functionally inert (404) whenever NODE_ENV === "production". That gate is
+// sound in the real production artifact specifically because NODE_ENV isn't
+// left to deploy-time configuration there: apps/api/Dockerfile bakes in
+// `ENV NODE_ENV=production` (Dockerfile:27), so it can't be accidentally
+// left unset on a production container -- see also the throw in auth.ts for
+// the project's convention of never trusting a soft default for anything
+// security-sensitive.
 //
 // Reads from lib/otp-capture.ts rather than better-auth's own
 // `auth.api.getVerificationOTP`: auth.ts configures the email-otp plugin

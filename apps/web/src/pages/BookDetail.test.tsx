@@ -215,7 +215,7 @@ beforeEach(() => {
   vi.mocked(updateLoan).mockReset();
   vi.mocked(toast).mockReset();
   navigateMock.mockReset();
-  vi.mocked(useHousehold).mockReturnValue({ user, household, members });
+  vi.mocked(useHousehold).mockReturnValue({ user, household, members, refreshUser: vi.fn() });
   unsyncedBookIds.clear();
 });
 

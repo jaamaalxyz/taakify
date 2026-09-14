@@ -17,6 +17,14 @@ type HouseholdContextValue = {
   // `[]` = loaded but empty (or failed — members are non-critical, so a fetch
   // failure degrades to an empty list rather than blocking the app).
   members: Member[] | null;
+  // Re-fetches /api/me and updates `user`/`household`/`members` in place.
+  // Consumers that mutate the signed-in user's own name/email (Profile.tsx)
+  // must call this after a successful change — otherwise this context keeps
+  // showing the stale value it fetched on mount until a full page reload,
+  // and a second email change can fail outright (the current-email step
+  // sends its OTP to the stale address, which no longer matches the
+  // session's real current email server-side).
+  refreshUser: () => Promise<void>;
 };
 
 const HouseholdContext = createContext<HouseholdContextValue | null>(null);
@@ -36,10 +44,14 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
   const [loadError, setLoadError] = useState("");
   const [members, setMembers] = useState<Member[] | null>(null);
 
-  useEffect(() => {
-    api<Me>("/api/me")
+  function fetchMe(): Promise<void> {
+    return api<Me>("/api/me")
       .then(setMe)
       .catch((e) => setLoadError(friendlyError(e)));
+  }
+
+  useEffect(() => {
+    fetchMe();
   }, []);
 
   const householdId = me && me.memberships.length > 0 ? me.memberships[0].household_id : null;
@@ -81,6 +93,7 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
     user: me.user,
     household: { id: membership.household_id, name: membership.household_name, role: membership.role },
     members,
+    refreshUser: fetchMe,
   };
 
   return <HouseholdContext.Provider value={value}>{children}</HouseholdContext.Provider>;
