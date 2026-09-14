@@ -248,7 +248,7 @@ export const auth = betterAuth({
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `pnpm --filter @taakify/api test -- auth.test.ts`
-Expected: FAIL differently, or PASS — `auth.test.ts`'s *other* two tests use the `signUp()` helper from `./helpers.js`, which still POSTs to the now-disabled `/api/auth/sign-up/email`. This is expected and fixed in Task 3; do not attempt to fix `helpers.ts` from within this task. Confirm specifically that the new "rejects password sign-up" test passes; the pre-existing two tests in this file are allowed to fail until Task 3 lands.
+Expected: FAIL differently, or PASS — `auth.test.ts`'s *other* two tests use the `signUp()` helper from `./helpers.js`, which still POSTs to the now-disabled `/api/auth/sign-up/email`. This is expected and fixed in Task 4 (the helpers.ts rewrite); do not attempt to fix `helpers.ts` from within this task. Confirm specifically that the new "rejects password sign-up" test passes; the pre-existing two tests in this file are allowed to fail until Task 4 lands. (Task 3, which comes next, is the test-only OTP read-back endpoint — unrelated to this failure.)
 
 - [ ] **Step 5: Commit**
 
@@ -374,6 +374,12 @@ git commit -m "test(api): add NODE_ENV-gated OTP read-back endpoint for E2E"
 
 **Interfaces:**
 - Produces: `signUp(app: Hono, email?: string): Promise<{ cookie: string; email: string }>` — **signature unchanged** from before this task. This is the entire point: 15 other test files call this and none of them need to change.
+- Consumes: `getPendingOtp` from `apps/api/src/lib/otp-capture.ts` (added by Task 3 — a deviation from Task 3's original brief, discovered and fixed during Task 3's implementation: `auth.api.getVerificationOTP` cannot work here because `auth.ts` configures `storeOTP: "hashed"` (Task 2) and better-auth's own store never holds a recoverable plaintext OTP once hashed — that method throws "OTP is hashed, cannot return the plain text OTP" unconditionally. `otp-capture.ts` captures the plaintext at send time instead, in an env-gated in-memory map, and is the only way to read an OTP back in this codebase now).
+
+**Correction from the original plan draft:** this task originally called
+`auth.api.getVerificationOTP` directly, which was written before Task 3's
+implementation discovered it cannot work under `storeOTP: "hashed"`. Use
+`getPendingOtp` from `../src/lib/otp-capture.js` instead, as shown below.
 
 - [ ] **Step 1: Run the full API test suite to capture the current failure baseline**
 
@@ -385,7 +391,7 @@ Expected: many failures — every file using `signUp()` now fails because it POS
 ```ts
 import type { Hono } from "hono";
 import { randomUUID } from "node:crypto";
-import { auth } from "../src/auth.js";
+import { getPendingOtp } from "../src/lib/otp-capture.js";
 
 // Signs up a fresh user via the real OTP endpoints; returns its session
 // cookie. Kept as one function with this exact signature so every existing
@@ -402,11 +408,12 @@ export async function signUp(
   });
   if (sendRes.status !== 200) throw new Error(`send-otp failed: ${sendRes.status} ${await sendRes.text()}`);
 
-  // Server-only method, same process as this test -- no HTTP round trip
-  // needed, and it's the one way to read the OTP back in a test (there is
-  // no email inbox here; RESEND_API_KEY is unset in test, see
-  // apps/api/test/env-setup.ts).
-  const { otp } = await auth.api.getVerificationOTP({ query: { email, type: "sign-in" } });
+  // auth.ts configures storeOTP: "hashed" (Task 2), so better-auth's own
+  // store never holds a recoverable plaintext OTP -- there is no email
+  // inbox here either (RESEND_API_KEY is unset in test, see
+  // apps/api/test/env-setup.ts), so otp-capture.ts's send-time capture is
+  // the only way to read the code back.
+  const otp = getPendingOtp(email, "sign-in");
   if (!otp) throw new Error(`no OTP pending for ${email}`);
 
   const res = await app.request("/api/auth/sign-in/email-otp", {
@@ -907,16 +914,9 @@ vi.mock("./lib/auth.js", () => ({
 }));
 ```
 
-Update the two tests that assert on the old `SignIn`/`SignUp` copy:
+Update the one test that asserts on the old `SignIn` copy (the other, "shows the landing page...", is intentionally left untouched by this task — see the note below):
 
 ```tsx
-  it("shows the landing page for unauthenticated visitors at /", () => {
-    vi.mocked(authClient.useSession).mockReturnValue({ data: null, isPending: false } as never);
-    renderApp("/");
-    expect(screen.getByRole("heading", { name: "Taakify" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Get started" })).toBeInTheDocument();
-  });
-
   it("still redirects unauthenticated users from /library to /signin", () => {
     vi.mocked(authClient.useSession).mockReturnValue({ data: null, isPending: false } as never);
     renderApp("/library");
@@ -924,7 +924,9 @@ Update the two tests that assert on the old `SignIn`/`SignUp` copy:
   });
 ```
 
-(The second test's expected heading text is unchanged — `Auth.tsx`'s email-step title is still "Sign in to Taakify".)
+This heading text is unchanged — `Auth.tsx`'s email-step title is still "Sign in to Taakify" — so this test actually needs no edit at all; it's called out here only to confirm it still passes with the new `Auth` component in place.
+
+**Do not touch the "shows the landing page for unauthenticated visitors at /" test in this task.** It currently asserts `screen.getByRole("link", { name: "Sign up" })` and `{ name: "Sign in" })`, matching `Landing.tsx`'s *current* two-button state — `Landing.tsx` isn't changed until Task 8. Updating this assertion here would make it fail from this task's commit until Task 8 lands. Task 8 owns this specific assertion change (to a single "Get started" link) because Task 8 is what actually changes `Landing.tsx`'s buttons.
 
 - [ ] **Step 8: Run the full web test suite**
 
@@ -950,6 +952,7 @@ git commit -m "feat(web): replace SignIn/SignUp with a unified email-OTP Auth pa
 **Files:**
 - Modify: `apps/web/src/pages/Landing.tsx`
 - Modify: `apps/web/src/pages/Landing.test.tsx`
+- Modify: `apps/web/src/App.test.tsx` (one assertion — see Step 5)
 
 **Interfaces:** none new — pure copy/markup change in the closing section.
 
@@ -1009,10 +1012,28 @@ with:
 Run: `pnpm --filter @taakify/web test -- Landing.test.tsx`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Update `apps/web/src/App.test.tsx`'s landing-page assertion**
+
+Task 7 deliberately left this one test's assertion on the old copy, since `Landing.tsx` hadn't changed yet at that point. Now that Step 3 above has landed, update it:
+
+```tsx
+  it("shows the landing page for unauthenticated visitors at /", () => {
+    vi.mocked(authClient.useSession).mockReturnValue({ data: null, isPending: false } as never);
+    renderApp("/");
+    expect(screen.getByRole("heading", { name: "Taakify" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Get started" })).toBeInTheDocument();
+  });
+```
+
+- [ ] **Step 6: Run the full web test suite**
+
+Run: `pnpm --filter @taakify/web test`
+Expected: PASS, all files — this confirms Step 5's `App.test.tsx` change lines up with Step 3's `Landing.tsx` change.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add apps/web/src/pages/Landing.tsx apps/web/src/pages/Landing.test.tsx
+git add apps/web/src/pages/Landing.tsx apps/web/src/pages/Landing.test.tsx apps/web/src/App.test.tsx
 git commit -m "feat(web): collapse Landing's Sign up/Sign in buttons into one Get started CTA"
 ```
 
