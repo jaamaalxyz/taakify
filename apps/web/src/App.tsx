@@ -1,7 +1,6 @@
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { authClient } from "./lib/auth.js";
-import { SignUp } from "./pages/SignUp.js";
-import { SignIn } from "./pages/SignIn.js";
+import { Auth } from "./pages/Auth.js";
 import { Onboarding } from "./pages/Onboarding.js";
 import { InviteAccept } from "./pages/InviteAccept.js";
 import { Landing } from "./pages/Landing.js";
@@ -36,8 +35,8 @@ export function App() {
 
   return (
     <Routes>
-      <Route path="/signup" element={authed ? <Navigate to="/" /> : <SignUp />} />
-      <Route path="/signin" element={authed ? <Navigate to="/" /> : <SignIn />} />
+      <Route path="/signup" element={authed ? <Navigate to="/" /> : <Auth />} />
+      <Route path="/signin" element={authed ? <Navigate to="/" /> : <Auth />} />
       <Route path="/invite/:token" element={<InviteAccept authed={authed} />} />
       <Route path="/onboarding" element={authed ? <Onboarding /> : <Navigate to="/signin" />} />
       {/*

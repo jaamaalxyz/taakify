@@ -8,7 +8,8 @@ import { api } from "./lib/api.js";
 vi.mock("./lib/auth.js", () => ({
   authClient: {
     useSession: vi.fn(),
-    signIn: { email: vi.fn(), social: vi.fn() },
+    emailOtp: { sendVerificationOtp: vi.fn(), verifyEmail: vi.fn() },
+    signIn: { emailOtp: vi.fn(), social: vi.fn() },
     signOut: vi.fn(),
   },
 }));
