@@ -6,6 +6,9 @@ import { Toaster } from "./components/ui/sonner";
 import "@fontsource/nunito/400.css";
 import "@fontsource/nunito/600.css";
 import "@fontsource/nunito/700.css";
+import "@fontsource/cormorant-garamond/500.css";
+import "@fontsource/cormorant-garamond/600.css";
+import "@fontsource/cormorant-garamond/700.css";
 import "./styles.css";
 
 createRoot(document.getElementById("root")!).render(

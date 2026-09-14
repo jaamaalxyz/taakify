@@ -4,6 +4,7 @@
 
 @theme {
   --font-sans: "Nunito", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Cormorant Garamond", ui-serif, Georgia, serif;
 }
 
 @layer base {
@@ -57,25 +58,31 @@
 
 :root {
     --radius: 0.75rem;
-    --background: #fff8f0;
-    --foreground: #2b211b;
+    --background: #ffffff;
+    --foreground: #1e221a;
     --card: #ffffff;
-    --card-foreground: #2b211b;
+    --card-foreground: #1e221a;
     --popover: #ffffff;
-    --popover-foreground: #2b211b;
-    --primary: #e8622d;
-    --primary-foreground: #ffffff;
-    --secondary: #f5e9dd;
-    --secondary-foreground: #2b211b;
-    --muted: #f5e9dd;
-    --muted-foreground: #6b5b4e;
-    --accent: #f5e9dd;
-    --accent-foreground: #2b211b;
-    --destructive: #dc2626;
+    --popover-foreground: #1e221a;
+    --primary: #38423b;
+    --primary-foreground: #f4efe6;
+    --secondary: #eae3d2;
+    --secondary-foreground: #4a4033;
+    --muted: #efe8da;
+    --muted-foreground: #706b63;
+    --accent: #f3e5df;
+    --accent-foreground: #94482c;
+    --destructive: #b3261e;
     --destructive-foreground: #ffffff;
-    --border: #e8ddd0;
-    --input: #e8ddd0;
-    --ring: #e8622d;
+    --border: #d6c7ab;
+    --input: #d6c7ab;
+    --ring: #38423b;
+    /* Decorative-only logo accents (not UI tokens -- no text ever sits on
+       these, so WCAG contrast rules don't apply). --accent-foreground is
+       tuned for text contrast on --accent and reads slightly muddy as a
+       bright fill, so the logo mark uses these instead. */
+    --logo-terracotta: #a85334;
+    --logo-gold: #c29b38;
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
@@ -92,25 +99,27 @@
 }
 
 .dark {
-    --background: #221812;
-    --foreground: #f5ede4;
-    --card: #2b2019;
-    --card-foreground: #f5ede4;
-    --popover: #2b2019;
-    --popover-foreground: #f5ede4;
-    --primary: #f2783f;
-    --primary-foreground: #1a1210;
-    --secondary: #382a21;
-    --secondary-foreground: #f5ede4;
-    --muted: #382a21;
-    --muted-foreground: #c4b3a4;
-    --accent: #382a21;
-    --accent-foreground: #f5ede4;
-    --destructive: #f87171;
-    --destructive-foreground: #1a1210;
-    --border: #3d2d23;
-    --input: #3d2d23;
-    --ring: #f2783f;
+    --background: #1c1f18;
+    --foreground: #f0ead9;
+    --card: #242820;
+    --card-foreground: #f0ead9;
+    --popover: #242820;
+    --popover-foreground: #f0ead9;
+    --primary: #7c8d6b;
+    --primary-foreground: #1c1f18;
+    --secondary: #333829;
+    --secondary-foreground: #f0ead9;
+    --muted: #2e3226;
+    --muted-foreground: #b9ae98;
+    --accent: #3a2b23;
+    --accent-foreground: #e0916b;
+    --destructive: #e5584a;
+    --destructive-foreground: #1c1f18;
+    --border: #3a3d31;
+    --input: #3a3d31;
+    --ring: #7c8d6b;
+    --logo-terracotta: #c96a45;
+    --logo-gold: #d9b563;
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
