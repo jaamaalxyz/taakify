@@ -92,7 +92,7 @@ export function Profile() {
   return (
     <div className="space-y-6">
       <div className="space-y-1">
-        <h1 className="text-lg font-semibold">{household.name}</h1>
+        <h1 className="font-serif text-lg font-semibold">{household.name}</h1>
         <p className="text-sm text-muted-foreground">
           Signed in as {user.name} ({user.email}) · {household.role}
         </p>

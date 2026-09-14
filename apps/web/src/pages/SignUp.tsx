@@ -8,6 +8,7 @@ import { Input } from "../components/ui/input.js";
 import { Label } from "../components/ui/label.js";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../components/ui/card.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
+import { Logo } from "../components/Logo.js";
 
 export function SignUp() {
   const [error, setError] = useState("");
@@ -28,7 +29,8 @@ export function SignUp() {
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center p-4">
+    <main className="flex min-h-dvh flex-col items-center justify-center gap-6 p-4">
+      <Logo className="h-10 w-10" />
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>Create your Taakify account</CardTitle>
